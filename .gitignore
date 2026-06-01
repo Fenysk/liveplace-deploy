@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Env & secrets — NEVER commit real secrets
+.env
+.env.*
+!.env.example
+
+# Convex
+apps/convex/.convex/
+
+# Logs / runtime
+*.log
+data/
+redis-data/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
