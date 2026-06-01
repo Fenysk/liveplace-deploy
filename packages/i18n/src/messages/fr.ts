@@ -32,6 +32,18 @@ export const fr: Catalog = {
   "canvas.erase": "Gommer",
   "canvas.gauge": "{current}/{max} pixels",
 
+  // Public profile (F11) — consumed by ProfilePage / profileView
+  "profile.notFound": "Profil introuvable",
+  "profile.memberSince": "Membre depuis {date}",
+  "profile.totals": "Totaux",
+  "profile.pixelsPlaced": "Pixels posés",
+  "profile.points": "Points",
+  "profile.canvasesJoined": "Toiles rejointes",
+  "profile.canvas": "Toile",
+  "profile.bestRank": "Meilleur rang",
+  "profile.rank": "n°{rank}",
+  "profile.empty": "Aucune toile rejointe pour l'instant.",
+
   // Generic
   "common.loading": "Chargement…",
   "common.error": "Une erreur est survenue",

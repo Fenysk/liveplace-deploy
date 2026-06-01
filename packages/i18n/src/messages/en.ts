@@ -36,6 +36,18 @@ export const en = {
   "canvas.erase": "Erase",
   "canvas.gauge": "{current}/{max} pixels",
 
+  // Public profile (F11) — consumed by ProfilePage / profileView
+  "profile.notFound": "Profile not found",
+  "profile.memberSince": "Member since {date}",
+  "profile.totals": "Totals",
+  "profile.pixelsPlaced": "Pixels placed",
+  "profile.points": "Points",
+  "profile.canvasesJoined": "Canvases joined",
+  "profile.canvas": "Canvas",
+  "profile.bestRank": "Best rank",
+  "profile.rank": "#{rank}",
+  "profile.empty": "No canvases joined yet.",
+
   // Generic
   "common.loading": "Loading…",
   "common.error": "Something went wrong",
