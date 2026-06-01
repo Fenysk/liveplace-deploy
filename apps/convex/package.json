@@ -1,0 +1,20 @@
+{
+  "name": "@canvas/convex",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "codegen": "convex codegen",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "convex dev",
+    "deploy": "convex deploy"
+  },
+  "dependencies": {
+    "@convex-dev/better-auth": "0.12.2",
+    "better-auth": "1.6.13",
+    "convex": "^1.39.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
