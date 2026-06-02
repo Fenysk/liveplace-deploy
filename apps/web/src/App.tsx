@@ -1,4 +1,5 @@
 import { LanguageSwitcher, useTranslate } from "@canvas/i18n/react";
+import { AuthButton } from "./auth/AuthButton.js";
 
 /**
  * Minimal app shell. Every visible string goes through `t(...)` so the whole
@@ -12,7 +13,10 @@ export function App(): React.ReactElement {
     <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "3rem auto", padding: "0 1rem" }}>
       <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "1rem" }}>
         <h1 style={{ margin: 0 }}>{t("app.title")}</h1>
-        <LanguageSwitcher />
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <AuthButton />
+          <LanguageSwitcher />
+        </div>
       </header>
       <p style={{ color: "#555" }}>{t("app.tagline")}</p>
 
@@ -24,7 +28,6 @@ export function App(): React.ReactElement {
       </nav>
 
       <section style={{ marginTop: "2rem" }}>
-        <button type="button">{t("auth.signIn")}</button>
         <p style={{ marginTop: "1rem", color: "#777" }}>{t("canvas.cooldown", { seconds: 5 })}</p>
       </section>
     </main>
