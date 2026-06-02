@@ -30,6 +30,7 @@ import { createAuthenticator, AuthError, type AuthedUser, type SocketAuthenticat
 import { SessionGauge, StaticGaugeBonusSource, type GaugeBonusSource } from "./gaugeBonus";
 import { DeltaCoalescer } from "./coalescer";
 import { SeqRingBuffer } from "./ringBuffer";
+import { TokenBucket } from "./rateLimiter";
 import {
   clearPresence,
   createRedisPair,
@@ -51,6 +52,12 @@ export class Connection {
      * passes to place-pixel. The placement handler reads `conn.gauge.effectiveGaugeMax`.
      */
     readonly gauge: SessionGauge,
+    /**
+     * Per-socket inbound-message rate limiter (G-I2). Bounds the raw message
+     * rate before any validation/Redis work, independent of the gauge. Optional
+     * so non-gateway constructions (tests) need not supply one.
+     */
+    readonly limiter?: TokenBucket,
   ) {}
 
   sendJson(msg: ServerMessage): void {
@@ -293,7 +300,12 @@ export class Gateway {
 
   private onConnection(ws: WebSocket, user: AuthedUser): void {
     const gauge = new SessionGauge(this.bonusSource, user.userId, this.cfg.gauge.base.gaugeMax);
-    const conn = new Connection(ws, user, gauge);
+    const limiter = new TokenBucket(
+      this.cfg.socket.inboundBurst,
+      this.cfg.socket.inboundRefillPerSec,
+      Date.now(),
+    );
+    const conn = new Connection(ws, user, gauge, limiter);
     this.clients.add(conn);
 
     // Resolve the durable F6 bonus for this session (FEN-27 #1). It starts at the
@@ -347,6 +359,13 @@ export class Gateway {
   }
 
   private async onClientMessage(conn: Connection, raw: string): Promise<void> {
+    // G-I2: bound the raw inbound message rate per socket BEFORE any parse /
+    // validation / Redis work, so a flood can't burn CPU or hot-path round-trips.
+    // The gauge limits accepted placements; this limits messages of any kind.
+    if (conn.limiter && !conn.limiter.tryRemove(Date.now())) {
+      conn.sendJson({ t: "error", code: "rate_limited", message: "slow down" });
+      return;
+    }
     let msg: ClientMessage;
     try {
       msg = decodeJson<ClientMessage>(raw);

@@ -51,6 +51,20 @@ export interface GatewayConfig {
 
   auth: AuthConfig;
   gauge: GaugeConfig;
+  socket: SocketConfig;
+}
+
+/**
+ * Per-socket inbound rate limit (guardrail G-I2). A token bucket bounds the raw
+ * message rate of a single connection before any work is done — orthogonal to
+ * the gauge, which only caps accepted placements. Defaults are generous: normal
+ * placing/panning is well under them; they only bite on a flood.
+ */
+export interface SocketConfig {
+  /** Burst size: messages a socket may send back-to-back before throttling. */
+  inboundBurst: number;
+  /** Sustained refill rate in messages per second. */
+  inboundRefillPerSec: number;
 }
 
 /**
@@ -123,6 +137,10 @@ export function loadConfig(): GatewayConfig {
       convexUrl: process.env.CONVEX_URL || undefined,
       canvasId: process.env.GATEWAY_CANVAS_ID || undefined,
       refreshSecret: process.env.GATEWAY_GAUGE_REFRESH_SECRET || undefined,
+    },
+    socket: {
+      inboundBurst: num("SOCKET_INBOUND_BURST", 30),
+      inboundRefillPerSec: num("SOCKET_INBOUND_REFILL_PER_SEC", 15),
     },
   };
 }

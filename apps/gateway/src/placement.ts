@@ -44,31 +44,43 @@ export interface PlaceScriptRunner {
 }
 
 /**
- * ioredis-backed runner. Registers `place.lua` as a custom command so ioredis
- * caches its SHA and uses EVALSHA on the hot path (falling back to EVAL on
- * NOSCRIPT automatically) — per placement we ship only the SHA + args, not the
- * whole script. `numberOfKeys` is the 4 KEYS place.lua expects: bitmap, gauge,
- * write counter, frozen flag.
+ * ioredis-backed runner. Loads `place.lua` once (SCRIPT LOAD) and runs it via
+ * EVALSHA on the hot path, reloading + retrying once on NOSCRIPT (a flushed
+ * script cache or a failover) — so per placement we ship only the SHA + args,
+ * not the whole script.
+ *
+ * The key COUNT is taken from `keys.length` per call rather than hard-coded:
+ * `placeArgs` returns a variable number of KEYS (the bitmap/gauge/meta core plus
+ * the frozen/stream/bans/op slots), so a fixed `numberOfKeys` would mis-split
+ * keys from argv. Passing the real count to EVALSHA keeps the boundary correct
+ * as the script's optional KEYS grow.
  */
 export class IoredisPlaceRunner implements PlaceScriptRunner {
-  private static readonly COMMAND = "placePixel";
+  private sha?: string;
 
-  constructor(private readonly cmd: Redis) {
-    const c = this.cmd as unknown as {
-      placePixel?: unknown;
-      defineCommand: (name: string, def: { numberOfKeys: number; lua: string }) => void;
+  constructor(private readonly cmd: Redis) {}
+
+  private get redis(): {
+    script: (sub: "LOAD", lua: string) => Promise<string>;
+    evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+  } {
+    return this.cmd as unknown as {
+      script: (sub: "LOAD", lua: string) => Promise<string>;
+      evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
     };
-    // Idempotent: defineCommand twice on one client would throw, so guard it.
-    if (typeof c.placePixel !== "function") {
-      c.defineCommand(IoredisPlaceRunner.COMMAND, { numberOfKeys: 4, lua: PLACE_LUA });
-    }
   }
 
-  run(keys: readonly string[], argv: readonly string[]): Promise<unknown> {
-    const c = this.cmd as unknown as {
-      placePixel: (...args: string[]) => Promise<unknown>;
-    };
-    return c.placePixel(...keys, ...argv);
+  async run(keys: readonly string[], argv: readonly string[]): Promise<unknown> {
+    const args = [...keys, ...argv].map(String);
+    if (this.sha === undefined) this.sha = await this.redis.script("LOAD", PLACE_LUA);
+    try {
+      return await this.redis.evalsha(this.sha, keys.length, ...args);
+    } catch (err) {
+      if (!/NOSCRIPT/.test((err as Error).message)) throw err;
+      // Script cache flushed (or we failed over) — reload once and retry.
+      this.sha = await this.redis.script("LOAD", PLACE_LUA);
+      return this.redis.evalsha(this.sha, keys.length, ...args);
+    }
   }
 }
 
@@ -85,7 +97,22 @@ export interface PlacementConfig {
   gauge: GaugeParams;
   /** Pub/sub channel place.lua fans the write out on; defaults to DELTA_CHANNEL. */
   deltaChannel?: string;
+  /**
+   * Canvas id this handler writes under (ADR-0003). MUST match the gateway's
+   * served canvas so the pixel bitmap, the ban set (CA6) and the snapshot the
+   * client read all share one namespace; omitted → DEFAULT_CANVAS_ID.
+   */
+  canvasId?: string;
+  /**
+   * TTL (ms) on a placement's idempotency claim (CA5). It only has to outlive a
+   * client's resend window after a reconnect, not be permanent. Defaults to
+   * DEFAULT_OP_TTL_MS.
+   */
+  opTtlMs?: number;
 }
+
+/** Default lifetime of an idempotency claim — comfortably covers a reconnect resend. */
+export const DEFAULT_OP_TTL_MS = 60_000;
 
 /**
  * The F5 placement handler. One client `place` → one atomic `place.lua` → one
@@ -97,6 +124,11 @@ export interface PlacementConfig {
  *   - frozen (F8.4) → `error { rate_limited }` ("frozen" is not in the frozen ws
  *                     ErrorCode contract; rate_limited is the closest "try later"
  *                     code — a dedicated code is the FE's protocol call, see FEN-19)
+ *   - banned (CA6)  → `error { banned }`
+ *
+ * Idempotency (CA5): when the client tags a placement with a positive `seq`, the
+ * script claims a per-op key so a resend (e.g. an optimistic client replaying an
+ * un-acked placement after a reconnect) places exactly once.
  */
 export class RedisPlacementHandler implements PlacementHandler {
   constructor(
@@ -125,6 +157,13 @@ export class RedisPlacementHandler implements PlacementHandler {
     // Effective max = canvas base + this user's resolved F6 bonus (FEN-27). Read
     // per call so a just-raised bonus lifts the ceiling immediately (D1 CA3).
     const gauge: GaugeParams = { ...this.cfg.gauge, gaugeMax: conn.gauge.effectiveGaugeMax };
+    // Idempotency key (CA5): the client's `place.seq` correlation, used ONLY when
+    // it is a stable positive integer. A naive client that omits it (or sends 0)
+    // gets no dedup — every place is independent, exactly as before.
+    const opId =
+      typeof msg.seq === "number" && Number.isInteger(msg.seq) && msg.seq > 0
+        ? String(msg.seq)
+        : "";
     const { keys, argv } = placeArgs({
       x: msg.x,
       y: msg.y,
@@ -135,7 +174,10 @@ export class RedisPlacementHandler implements PlacementHandler {
       nowMs: this.now(),
       gauge,
       userId,
+      canvasId: this.cfg.canvasId,
       deltaChannel: this.cfg.deltaChannel ?? DELTA_CHANNEL,
+      opId,
+      opTtlMs: this.cfg.opTtlMs ?? DEFAULT_OP_TTL_MS,
     });
 
     let result: PlaceResult;
@@ -172,6 +214,16 @@ export class RedisPlacementHandler implements PlacementHandler {
           t: "error",
           code: "rate_limited",
           message: "the canvas is frozen by a moderator",
+          seq: msg.seq,
+        });
+        return;
+      case "banned":
+        // CA6: a banned viewer's placement is rejected server-side. `banned` is
+        // a first-class ErrorCode in the frozen ws contract.
+        conn.sendJson({
+          t: "error",
+          code: "banned",
+          message: "you are banned from this canvas",
           seq: msg.seq,
         });
         return;

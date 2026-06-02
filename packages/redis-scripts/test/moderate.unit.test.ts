@@ -34,6 +34,7 @@ test("canvasKeys derives the per-canvas key namespace (ADR-0003)", () => {
     meta: "canvas:my-slug:meta",
     stream: "canvas:my-slug:stream",
     frozen: "canvas:my-slug:frozen",
+    bans: "canvas:my-slug:bans",
   });
 });
 
@@ -78,11 +79,13 @@ test("placeArgs lays out the per-canvas KEYS and threads userId into ARGV (FEN-5
     x: 0, y: 0, width: 16, height: 16, color: 5, paletteSize: 32,
     nowMs: 1_000, gauge: DEFAULT_GAUGE, userId: "u1", canvasId: CID,
   });
-  // KEYS = [pixels, userGauge, meta, frozen, stream]
-  assert.deepEqual(keys, [K.pixels, userGaugeKey("u1"), K.meta, K.frozen, K.stream]);
-  assert.equal(keys.length, 5);
-  // userId is the last ARGV element (ARGV[13]), carried onto the stream record.
-  assert.equal(argv[argv.length - 1], "u1");
+  // KEYS = [pixels, userGauge, meta, frozen, stream, bans, op] — the bans set
+  // (CA6) is always present; the op slot is "" with no opId (CA5: idempotency off).
+  assert.deepEqual(keys, [K.pixels, userGaugeKey("u1"), K.meta, K.frozen, K.stream, K.bans, ""]);
+  assert.equal(keys.length, 7);
+  // userId is ARGV[13] (argv[12]), carried onto the stream record; opId/opTtl
+  // (ARGV[14]/[15]) follow it.
+  assert.equal(argv[12], "u1");
   assert.equal(argv[11], DELTA_CHANNEL); // ARGV[12] = deltaChannel, unchanged
 });
 

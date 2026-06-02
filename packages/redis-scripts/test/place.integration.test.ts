@@ -114,3 +114,65 @@ test("place.lua + refill-peek.lua against live Redis", { skip: !REDIS_URL }, asy
   assert.equal(up.max, 5); // effective ceiling = base 3 + bonus 2
   assert.equal(up.charges, 4); // arrived full at 5, consumed 1 → proves it stores 5
 });
+
+test("place.lua F4: ban enforcement (CA6) + idempotency (CA5) against live Redis", { skip: !REDIS_URL }, async (t) => {
+  const { PLACE_LUA, placeArgs, parsePlaceResult, canvasKeys, userGaugeKey, DEFAULT_GAUGE } =
+    await import("../src/index.ts");
+  const { default: Redis } = await import("ioredis");
+
+  const redis = new Redis(REDIS_URL!);
+  const canvasId = `f4-${process.pid}`;
+  const K = canvasKeys(canvasId);
+  const banned = `banned-${process.pid}`;
+  const op = `op-${process.pid}`;
+  const W = 16, H = 16;
+  const P = { ...DEFAULT_GAUGE, refillIntervalMs: 1000, gaugeMax: 5 };
+  const keysToClear = [
+    K.pixels, K.meta, K.stream, K.bans,
+    userGaugeKey(banned), userGaugeKey(op),
+    `canvas:${canvasId}:op:${op}:7`, `canvas:${canvasId}:op:${op}:8`,
+  ];
+
+  t.after(async () => {
+    await redis.del(...keysToClear);
+    redis.disconnect();
+  });
+  await redis.del(...keysToClear);
+
+  const base = { width: W, height: H, paletteSize: 32, gauge: P, canvasId, deltaChannel: "" } as const;
+  const place = async (opts: Omit<Parameters<typeof placeArgs>[0], keyof typeof base>) => {
+    const { keys, argv } = placeArgs({ ...base, ...opts });
+    return parsePlaceResult(await redis.eval(PLACE_LUA, keys.length, ...keys, ...argv));
+  };
+
+  const t0 = 1_000_000_000_000;
+
+  // CA6: a userId in the ban set is rejected with "banned"; no charge consumed,
+  // no pixel written. Lifting the ban (SREM) lets the next placement through.
+  await redis.sadd(K.bans, banned);
+  let r = await place({ x: 0, y: 0, color: 5, nowMs: t0, userId: banned });
+  assert.equal(r.status, "banned");
+  assert.equal(Number(await redis.exists(userGaugeKey(banned))), 0, "banned placement touches no gauge");
+  assert.equal(Number((await redis.get(K.meta)) ?? 0), 0, "banned placement writes no version");
+
+  await redis.srem(K.bans, banned);
+  r = await place({ x: 0, y: 0, color: 5, nowMs: t0, userId: banned });
+  assert.equal(r.status, "ok", "unbanned user places again");
+
+  // CA5: same opId places exactly once — a replay returns ok WITHOUT consuming a
+  // second charge or incrementing the version a second time.
+  const first = await place({ x: 1, y: 1, color: 5, nowMs: t0, userId: op, opId: "7", opTtlMs: 60_000 });
+  assert.equal(first.status, "ok");
+  assert.equal(first.charges, 4, "arrived full at 5, consumed 1");
+  const versionAfterFirst = Number(await redis.get(K.meta));
+
+  const replay = await place({ x: 1, y: 1, color: 5, nowMs: t0, userId: op, opId: "7", opTtlMs: 60_000 });
+  assert.equal(replay.status, "ok", "replay still acks ok");
+  assert.equal(Number(await redis.hget(userGaugeKey(op), "c")), 4, "replay does NOT consume a second charge");
+  assert.equal(Number(await redis.get(K.meta)), versionAfterFirst, "replay does NOT advance the version");
+
+  // A DIFFERENT opId from the same user is a fresh placement and does consume.
+  const second = await place({ x: 2, y: 2, color: 5, nowMs: t0, userId: op, opId: "8", opTtlMs: 60_000 });
+  assert.equal(second.status, "ok");
+  assert.equal(second.charges, 3, "distinct op consumes another charge");
+});

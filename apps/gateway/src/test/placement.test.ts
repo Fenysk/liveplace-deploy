@@ -140,3 +140,48 @@ test("ack falls back to seq 0 when the client omitted its correlation id", async
   );
   assert.equal((conn.sent[0] as { seq: number }).seq, 0);
 });
+
+test("banned (CA6) ⇒ error { banned } (first-class ws code)", async () => {
+  const conn = fakeConn({ userId: "u", effectiveGaugeMax: 20 });
+  await new RedisPlacementHandler(fakeRunner(["banned", 0, 20, 0]), CFG, clock).handlePlace(conn, place());
+  assert.deepEqual(conn.sent, [
+    { t: "error", code: "banned", message: "you are banned from this canvas", seq: 42 },
+  ]);
+});
+
+test("CA5: a positive client seq becomes the per-op idempotency claim key", async () => {
+  const runner = fakeRunner(["ok", 19, 20, 0]);
+  const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
+  await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ seq: 42 }));
+
+  // placeArgs KEYS order: [pixels, gauge, meta, frozen, stream, bans, op].
+  const { keys, argv } = runner.calls[0]!;
+  assert.equal(keys[5], "canvas:default:bans", "the per-canvas ban set is always passed (CA6)");
+  assert.equal(keys[6], "canvas:default:op:user-7:42", "op claim key is namespaced by canvas/user/op");
+  assert.equal(argv[13], "42", "opId ARGV is the client seq");
+  assert.ok(Number(argv[14]) > 0, "a positive op TTL is supplied");
+});
+
+test("CA5: no idempotency when seq is absent or non-positive (naive client keeps placing)", async () => {
+  for (const seq of [undefined, 0, -3]) {
+    const runner = fakeRunner(["ok", 19, 20, 0]);
+    const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
+    await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ seq }));
+    const { keys, argv } = runner.calls[0]!;
+    assert.equal(keys[6], "", `op key empty for seq=${String(seq)} → idempotency off`);
+    assert.equal(argv[13], "", "opId ARGV empty");
+  }
+});
+
+test("places under the gateway's configured canvas id (CA6 ban set agrees with pixels)", async () => {
+  const runner = fakeRunner(["ok", 19, 20, 0]);
+  const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
+  await new RedisPlacementHandler(runner, { ...CFG, canvasId: "liveplace" }, clock).handlePlace(
+    conn,
+    place({ seq: 7 }),
+  );
+  const { keys } = runner.calls[0]!;
+  assert.equal(keys[0], "canvas:liveplace:pixels");
+  assert.equal(keys[5], "canvas:liveplace:bans");
+  assert.equal(keys[6], "canvas:liveplace:op:user-7:7");
+});

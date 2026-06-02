@@ -36,6 +36,8 @@ function cfg(): GatewayConfig {
     instanceId: "test-gw",
     auth: { devSecret: SECRET, disabled: false },
     gauge: { base: { ...DEFAULT_GAUGE } },
+    // Generous so the e2e flow never trips the rate limiter (G-I2 has its own test).
+    socket: { inboundBurst: 1_000, inboundRefillPerSec: 1_000 },
   };
 }
 

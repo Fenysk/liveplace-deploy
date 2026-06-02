@@ -84,6 +84,16 @@ export interface CanvasKeys {
    * A single SET/DEL on this key is the whole freeze action.
    */
   frozen: string;
+  /**
+   * Per-canvas ban set (F4 CA6) — a Redis SET of banned `userId`s. `place.lua`
+   * `SISMEMBER`s the placer against it before touching the gauge, so a banned
+   * viewer's placement is rejected (`banned`) atomically on the very next write,
+   * across every gateway instance. This is the hot-path ENFORCEMENT side; the
+   * durable source of truth is the Convex `bans` table and the set is POPULATED
+   * (SADD on ban, SREM on unban) by the moderation ban-push gateway endpoint
+   * (FEN-19). Absent/empty set = nobody banned.
+   */
+  bans: string;
 }
 
 /**
@@ -97,7 +107,23 @@ export function canvasKeys(canvasId: string): CanvasKeys {
     meta: `canvas:${canvasId}:meta`,
     stream: `canvas:${canvasId}:stream`,
     frozen: `canvas:${canvasId}:frozen`,
+    bans: `canvas:${canvasId}:bans`,
   };
+}
+
+/**
+ * Per-(canvas, user, op) idempotency key (F4 CA5). `place.lua` claims it with
+ * `SET … NX` the instant before it commits a placement; a replay of the SAME
+ * client op (e.g. an optimistic client resending an un-acked placement after a
+ * reconnect) finds the key already set and is answered with the prior `ok`
+ * WITHOUT consuming a second charge or fanning out a second delta — so one
+ * client op places exactly once. The `opId` is the client-supplied `place.seq`
+ * correlation (only used as an idempotency key when it is a positive integer;
+ * a naive client that omits it keeps placing normally). Short-TTL'd: it only
+ * needs to outlive the client's retry window, not be a permanent record.
+ */
+export function userOpKey(canvasId: string, userId: string, opId: string): string {
+  return `canvas:${canvasId}:op:${userId}:${opId}`;
 }
 
 /**
@@ -162,7 +188,13 @@ export function parseStreamRecord(fields: ReadonlyArray<string>): PlacementStrea
 // Typed wrappers for the script results.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type PlaceStatus = "ok" | "cooldown" | "out_of_bounds" | "invalid_color" | "frozen";
+export type PlaceStatus =
+  | "ok"
+  | "cooldown"
+  | "out_of_bounds"
+  | "invalid_color"
+  | "frozen"
+  | "banned";
 
 export interface PlaceResult {
   status: PlaceStatus;
@@ -210,16 +242,25 @@ export function parsePeekResult(raw: unknown): PeekResult {
 
 /**
  * Build args for place.lua.
- * KEYS = [pixels, userGaugeKey, meta, frozen, stream]; ARGV as documented in the
- * script. `meta` feeds the monotonic per-write version used for reconnect/resync
- * (FEN-13) AND stamped onto each durable stream record (R2); the frozen flag
- * (F8.4) lets a moderator close placement for everyone with a single SET. The
- * authenticated `userId` is threaded into both the gauge key and the stream
- * record (ARGV) so the worker's placement log carries the placer (FEN-54 #2).
+ * KEYS = [pixels, userGaugeKey, meta, frozen, stream, bans, op]; ARGV as
+ * documented in the script. `meta` feeds the monotonic per-write version used
+ * for reconnect/resync (FEN-13) AND stamped onto each durable stream record
+ * (R2); the frozen flag (F8.4) lets a moderator close placement for everyone
+ * with a single SET; the `bans` set (F4 CA6) is `SISMEMBER`-checked to reject a
+ * banned placer; the `op` key (F4 CA5) is `SET … NX`-claimed for exactly-once
+ * placement. The authenticated `userId` is threaded into the gauge key, the ban
+ * check and the stream record (ARGV) so the worker's placement log carries the
+ * placer (FEN-54 #2).
  *
  * `canvasId` defaults to DEFAULT_CANVAS_ID for single-canvas/local use; a caller
  * serving a specific canvas (GATEWAY_CANVAS_ID set) MUST pass it so placements
  * land on the SAME per-canvas keys the gateway's snapshot read uses.
+ *
+ * `opId` is the client's `place.seq` correlation (F4 CA5). Pass it ONLY when it
+ * is a stable per-placement id (a positive integer); omit/leave empty for a
+ * naive client and idempotency is simply not engaged. When empty the op KEYS
+ * slot is `""` and the script skips the claim. `opTtlMs` bounds how long a
+ * claim is remembered (the client's retry window); 0 = no expiry.
  */
 export function placeArgs(opts: {
   x: number;
@@ -233,10 +274,17 @@ export function placeArgs(opts: {
   userId: string;
   canvasId?: string;
   deltaChannel?: string;
-}): { keys: [string, string, string, string, string]; argv: string[] } {
-  const k = canvasKeys(opts.canvasId ?? DEFAULT_CANVAS_ID);
+  opId?: string;
+  opTtlMs?: number;
+}): { keys: [string, string, string, string, string, string, string]; argv: string[] } {
+  const canvasId = opts.canvasId ?? DEFAULT_CANVAS_ID;
+  const k = canvasKeys(canvasId);
+  const opId = opts.opId ?? "";
+  // Empty op slot ("") when no idempotency id is supplied; the script guards on
+  // it so the slot stays positional without ever being touched.
+  const opKey = opId === "" ? "" : userOpKey(canvasId, opts.userId, opId);
   return {
-    keys: [k.pixels, userGaugeKey(opts.userId), k.meta, k.frozen, k.stream],
+    keys: [k.pixels, userGaugeKey(opts.userId), k.meta, k.frozen, k.stream, k.bans, opKey],
     argv: [
       String(opts.x),
       String(opts.y),
@@ -251,6 +299,8 @@ export function placeArgs(opts: {
       String(opts.gauge.gaugeTtlMs),
       opts.deltaChannel ?? DELTA_CHANNEL,
       opts.userId,
+      opId,
+      String(opts.opTtlMs ?? 0),
     ],
   };
 }

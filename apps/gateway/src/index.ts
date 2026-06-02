@@ -52,6 +52,9 @@ async function main(): Promise<void> {
     height: cfg.height,
     paletteSize: PALETTE_SIZE,
     gauge: cfg.gauge.base,
+    // Serve the same canvas namespace the gateway snapshots/fans out under, so
+    // placements, the ban set (CA6) and the snapshot all agree (ADR-0003).
+    canvasId: cfg.canvasId,
   });
 
   const gateway = new Gateway(cfg, placement, redis, bonusSource);
