@@ -26,6 +26,7 @@ import {
   type CanvasShape,
   type PlacementDecision,
 } from "./lib/canvasRules";
+import { planGalleryFieldsPatch } from "./lib/gallery";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers.
@@ -304,6 +305,59 @@ export const setPlacementOpen = mutation({
     assertOwner(canvas, ownerId);
     await ctx.db.patch(args.canvasId, { placementOpen: args.open });
     return null;
+  },
+});
+
+/**
+ * Worker → gallery discovery fields (F12 / FEN-33, ADR-0001). The persistence
+ * worker maintains the discovery fields ON the canvas row, OFF the hot path
+ * (G-A1): `lastActivityAt` (newest drained placement), `viewerCount` (periodic
+ * presence flush), and `thumbnailStorageId`/`thumbnailVersion` (a preview blob
+ * pre-rendered from a snapshot — never on the fly, G-Perf3).
+ *
+ * The worker addresses the row by its WS `canvasId`, which ADR-0001 fixes equal
+ * to the F2 `slug` (enforced by `GATEWAY_CANVAS_ID`); we resolve it via the
+ * `by_slug` index. Public (no `ctx.auth`): the worker is a trusted backend
+ * service calling over the self-hosted Convex, like the other `flush`/`canvas`
+ * worker-support functions.
+ *
+ * Ownership boundary: if no row matches the slug yet, this is a **no-op**, never
+ * a create — F2 `createCanvas` is the sole creator of canvas rows. The merge is
+ * idempotent and monotonic (`planGalleryFieldsPatch`), so out-of-order or
+ * redelivered flushes can't regress gallery state; a superseded thumbnail blob
+ * is freed from storage.
+ */
+export const setGalleryFields = mutation({
+  args: {
+    slug: v.string(),
+    lastActivityAt: v.optional(v.number()),
+    viewerCount: v.optional(v.number()),
+    thumbnailStorageId: v.optional(v.id("_storage")),
+    thumbnailVersion: v.optional(v.number()),
+  },
+  returns: v.object({ updated: v.boolean() }),
+  handler: async (ctx, args): Promise<{ updated: boolean }> => {
+    const canvas = await ctx.db
+      .query("canvases")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .unique();
+    if (!canvas) return { updated: false }; // resolution-miss → no-op (ADR-0001)
+
+    const { freeStorageId, ...fields } = planGalleryFieldsPatch(canvas, {
+      lastActivityAt: args.lastActivityAt,
+      viewerCount: args.viewerCount,
+      thumbnailStorageId: args.thumbnailStorageId,
+      thumbnailVersion: args.thumbnailVersion,
+    });
+    if (Object.keys(fields).length === 0) return { updated: false };
+
+    await ctx.db.patch(canvas._id, fields as Partial<Doc<"canvases">>);
+    if (freeStorageId) {
+      // Best-effort: the durable patch is what matters; a leaked blob is
+      // harmless, a thrown delete would needlessly fail the flush write.
+      await ctx.storage.delete(freeStorageId as Id<"_storage">).catch(() => undefined);
+    }
+    return { updated: true };
   },
 });
 

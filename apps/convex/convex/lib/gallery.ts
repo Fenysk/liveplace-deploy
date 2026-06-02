@@ -125,3 +125,90 @@ export function compareByActivity(a: GalleryItem, b: GalleryItem): number {
     (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Worker write path — discovery-field merge (F12 / FEN-33, ADR-0001).
+//
+// The persistence worker maintains the discovery fields ON the canvas row, off
+// the hot path. This pure merge is the heart of the `canvas:setGalleryFields`
+// mutation; keeping it framework-free lets the monotonic/idempotent rules be
+// unit-tested without a Convex runtime.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A worker discovery-field write. Every field is independently optional. */
+export interface GalleryFieldsUpdate {
+  /** Epoch ms of the newest drained placement this flush. */
+  lastActivityAt?: number;
+  /** Latest presence snapshot (a level, not a counter). */
+  viewerCount?: number;
+  /** Blob ref of a freshly rendered preview; paired with `thumbnailVersion`. */
+  thumbnailStorageId?: string;
+  /** Canvas version the preview depicts; pairs with `thumbnailStorageId`. */
+  thumbnailVersion?: number;
+}
+
+/** The discovery state already on the row, against which the update is merged. */
+export interface GalleryFieldsState {
+  lastActivityAt?: number;
+  viewerCount?: number;
+  thumbnailStorageId?: string;
+  thumbnailVersion?: number;
+}
+
+/** Resolved patch: only changed fields, plus any blob the caller must free. */
+export interface GalleryFieldsPatch {
+  lastActivityAt?: number;
+  viewerCount?: number;
+  thumbnailStorageId?: string;
+  thumbnailVersion?: number;
+  /** A superseded thumbnail blob id the caller should delete from storage. */
+  freeStorageId?: string;
+}
+
+/**
+ * Compute the monotonic, idempotent patch for a worker discovery-field write.
+ *
+ * - `lastActivityAt` only ever advances, so an out-of-order or redelivered flush
+ *   can never regress the gallery's activity sort.
+ * - `thumbnailVersion` only advances; the blob ref swaps ONLY when the version
+ *   advances (G-Perf3 keeps exactly one preview), and the superseded blob id is
+ *   returned as `freeStorageId` so the caller can free it.
+ * - `viewerCount` is a latest-wins presence level, clamped to a non-negative
+ *   integer; a non-finite value is ignored.
+ *
+ * Returns ONLY the fields that actually change — an idempotent re-send of the
+ * same or older values yields an empty patch (no write).
+ */
+export function planGalleryFieldsPatch(
+  state: GalleryFieldsState,
+  update: GalleryFieldsUpdate,
+): GalleryFieldsPatch {
+  const patch: GalleryFieldsPatch = {};
+
+  if (typeof update.lastActivityAt === "number" && Number.isFinite(update.lastActivityAt)) {
+    if (state.lastActivityAt === undefined || update.lastActivityAt > state.lastActivityAt) {
+      patch.lastActivityAt = update.lastActivityAt;
+    }
+  }
+
+  if (update.viewerCount !== undefined) {
+    const v = Math.max(0, Math.floor(update.viewerCount));
+    if (Number.isFinite(v) && v !== state.viewerCount) patch.viewerCount = v;
+  }
+
+  // Thumbnail blob + version move together and only forward.
+  if (
+    typeof update.thumbnailVersion === "number" &&
+    Number.isFinite(update.thumbnailVersion) &&
+    update.thumbnailStorageId !== undefined &&
+    (state.thumbnailVersion === undefined || update.thumbnailVersion > state.thumbnailVersion)
+  ) {
+    patch.thumbnailVersion = update.thumbnailVersion;
+    patch.thumbnailStorageId = update.thumbnailStorageId;
+    if (state.thumbnailStorageId && state.thumbnailStorageId !== update.thumbnailStorageId) {
+      patch.freeStorageId = state.thumbnailStorageId;
+    }
+  }
+
+  return patch;
+}

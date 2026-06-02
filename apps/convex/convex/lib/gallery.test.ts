@@ -14,6 +14,7 @@ import {
   compareByActivity,
   isListablePublicCanvas,
   activityTimestamp,
+  planGalleryFieldsPatch,
   type GalleryCanvasRow,
   type GalleryStreamerRow,
 } from "./gallery.ts";
@@ -107,4 +108,77 @@ test("compareByActivity — most recent first, ties break by viewers then slug",
   // c & d tie on activity+viewers → slug asc (c before d); both beat a (fewer
   // viewers, same activity); a beats b (more recent activity).
   assert.deepEqual(sorted.map((i) => i.slug), ["c", "d", "a", "b"]);
+});
+
+// ── Worker write path: planGalleryFieldsPatch (FEN-33) ──────────────────────
+
+test("lastActivityAt only advances; an older/equal flush is a no-op", () => {
+  const state = { lastActivityAt: 100 };
+  assert.deepEqual(planGalleryFieldsPatch(state, { lastActivityAt: 150 }), {
+    lastActivityAt: 150,
+  });
+  assert.deepEqual(planGalleryFieldsPatch(state, { lastActivityAt: 100 }), {});
+  assert.deepEqual(planGalleryFieldsPatch(state, { lastActivityAt: 50 }), {});
+});
+
+test("lastActivityAt sets from undefined; non-finite is ignored", () => {
+  assert.deepEqual(planGalleryFieldsPatch({}, { lastActivityAt: 10 }), {
+    lastActivityAt: 10,
+  });
+  assert.deepEqual(planGalleryFieldsPatch({}, { lastActivityAt: NaN }), {});
+});
+
+test("viewerCount is latest-wins, clamped to a non-negative integer", () => {
+  assert.deepEqual(planGalleryFieldsPatch({ viewerCount: 5 }, { viewerCount: 9 }), {
+    viewerCount: 9,
+  });
+  // a drop is allowed (it's a level, not a counter)
+  assert.deepEqual(planGalleryFieldsPatch({ viewerCount: 9 }, { viewerCount: 2 }), {
+    viewerCount: 2,
+  });
+  // unchanged → no write
+  assert.deepEqual(planGalleryFieldsPatch({ viewerCount: 3 }, { viewerCount: 3 }), {});
+  // clamp + floor
+  assert.deepEqual(planGalleryFieldsPatch({}, { viewerCount: -4 }), { viewerCount: 0 });
+  assert.deepEqual(planGalleryFieldsPatch({}, { viewerCount: 7.8 }), { viewerCount: 7 });
+});
+
+test("thumbnail blob + version move together and only forward", () => {
+  // fresh: sets both
+  assert.deepEqual(
+    planGalleryFieldsPatch({}, { thumbnailStorageId: "blob_1", thumbnailVersion: 3 }),
+    { thumbnailStorageId: "blob_1", thumbnailVersion: 3 },
+  );
+  // advance: swaps blob, frees the old one
+  assert.deepEqual(
+    planGalleryFieldsPatch(
+      { thumbnailStorageId: "blob_1", thumbnailVersion: 3 },
+      { thumbnailStorageId: "blob_2", thumbnailVersion: 5 },
+    ),
+    { thumbnailStorageId: "blob_2", thumbnailVersion: 5, freeStorageId: "blob_1" },
+  );
+  // stale/equal version → no-op (idempotent redelivery), no blob churn
+  assert.deepEqual(
+    planGalleryFieldsPatch(
+      { thumbnailStorageId: "blob_2", thumbnailVersion: 5 },
+      { thumbnailStorageId: "blob_old", thumbnailVersion: 5 },
+    ),
+    {},
+  );
+  // version without a blob ref is ignored (they must be paired)
+  assert.deepEqual(planGalleryFieldsPatch({}, { thumbnailVersion: 9 }), {});
+});
+
+test("an empty update yields an empty patch (no write)", () => {
+  assert.deepEqual(planGalleryFieldsPatch({ lastActivityAt: 1, viewerCount: 2 }, {}), {});
+});
+
+test("independent fields merge in a single patch", () => {
+  assert.deepEqual(
+    planGalleryFieldsPatch(
+      { lastActivityAt: 100, viewerCount: 1 },
+      { lastActivityAt: 200, viewerCount: 4, thumbnailStorageId: "b", thumbnailVersion: 1 },
+    ),
+    { lastActivityAt: 200, viewerCount: 4, thumbnailStorageId: "b", thumbnailVersion: 1 },
+  );
 });
