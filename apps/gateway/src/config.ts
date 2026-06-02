@@ -49,6 +49,14 @@ export interface GatewayConfig {
   /** Unique id for this gateway process (presence key + logs). */
   instanceId: string;
 
+  /**
+   * Shared secret guarding the moderation internal routes (`POST /internal/{moderate,
+   * ban,freeze,flush}`, F8/FEN-19). Convex sends it as `Authorization: Bearer`.
+   * Unset → those routes are disabled (404) and moderation has no realtime effect
+   * (Convex still records durable state — see moderation-internal.md).
+   */
+  internalSecret?: string;
+
   auth: AuthConfig;
   gauge: GaugeConfig;
   socket: SocketConfig;
@@ -120,6 +128,7 @@ export function loadConfig(): GatewayConfig {
     presenceTtlMs,
     heartbeatMs: num("HEARTBEAT_MS", 30_000),
     instanceId: process.env.GATEWAY_INSTANCE_ID ?? `${hostname()}-${process.pid}`,
+    internalSecret: process.env.GATEWAY_INTERNAL_SECRET || undefined,
     auth: {
       jwksUrl: process.env.CONVEX_JWKS_URL || undefined,
       issuer: process.env.GATEWAY_JWT_ISSUER || undefined,

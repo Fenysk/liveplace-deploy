@@ -1,7 +1,9 @@
 # Contract — persistence-worker durable layer (Convex)
 
-Status: durable Convex layer **landed** (FEN-47). Worker *binary* wiring blocked on
-the Redis hot-path reconciliation — see "Open prerequisite" below.
+Status: durable Convex layer **landed** (FEN-47). Redis hot-path reconciliation
+**landed** (FEN-54, ADR-0003) — the placement hot path now emits the durable
+per-canvas stream the worker drains. Worker *binary* + Compose wiring is the
+remaining child (see "Redis hot-path — the drain source" below).
 
 The persistence worker (FEN-17) is the off-hot-path durable side of the system:
 it drains the Redis placement stream to Convex in idempotent batches, periodically
@@ -59,24 +61,53 @@ calls `points.accruePlacementPoints`, the same helper behind the internal
 `points:awardPlacementPoints`. Only freshly-inserted (non-dup) placements feed it,
 so points/`pixelsPlaced` stay exactly-once aligned with the placement log.
 
-## Open prerequisite — Redis hot-path reconciliation (blocks the worker binary)
+## Redis hot-path — the drain source (FEN-54, ADR-0003)
 
-The durable Convex layer above is complete and testable. The worker **binary**
-cannot yet run end-to-end against the canonical gateway because the two lineages
-also diverged on the Redis hot-path schema:
+The hot path now writes the per-canvas keys the worker drains. All keys derive
+from the canvas id (= `GATEWAY_CANVAS_ID` = F2 `slug`) via `canvasKeys(id)` in
+`@canvas/redis-scripts` — the single source of truth shared by producer and
+consumer:
 
-- Canonical hot path (`packages/redis-scripts`, `apps/gateway`) writes a single
-  `canvas:bitmap`, a `canvas:writes:count` counter, and publishes ephemeral
-  `canvas:deltas` (`seq,x,y,color` — **no `userId`, no `ts`, not durable**).
-- The worker drains a per-canvas **stream** `canvas:{id}:stream` with full
-  `{x,y,color,version,userId,ts}` records, plus `canvas:{id}:meta` (version) and
-  `canvas:{id}:pixels`.
+| Key | Type | Role |
+| --- | --- | --- |
+| `canvas:{id}:pixels` | string | 1 byte/pixel bitmap, row-major. Snapshot source. |
+| `canvas:{id}:meta`   | string (INCR) | Monotonic version == delta seq == snapshot label == canvas head version. |
+| `canvas:{id}:stream` | stream | **Durable placement log** the worker drains (below). |
+| `canvas:{id}:frozen` | string | F8.4 emergency-freeze flag. |
+| `canvas:deltas`      | pub/sub | Ephemeral realtime fan-out (`seq,x,y,color`); **not** drained. |
+| `presence:inst:*`    | string | Per-instance viewer count (summed for `viewerCount`). |
 
-Until `place.lua` + the gateway emit that durable placement stream (and agree on
-per-canvas keys), `applyFlush` / snapshot / restore have nothing to consume. This
-is a hot-path contract decision (R1/R2, Founding-Engineer-owned) tracked as a
-follow-up child of FEN-47. The viewer-count path is unaffected — it reads the
-shared `presence:inst:*` keys the canonical gateway already writes.
+**Stream record.** `place.lua` `XADD`s one entry per accepted placement, in the
+same atomic critical section as the bitmap write + version INCR:
+
+```
+XADD canvas:{id}:stream * x <x> y <y> color <color> version <v> userId <uid> ts <ms>
+```
+
+- `version` is the INCRemented `meta` counter — identical to the value stamped on
+  the realtime delta, so stream order == write order == resync order.
+- The entry's auto-generated stream ID is the worker's resume cursor
+  (`flushState.lastStreamId`); `version` is the idempotency key on
+  `(canvasId, version)` for `applyFlush`.
+- The record shape matches `applyFlush`'s `placements[]` element exactly. The
+  worker should parse entries with `parseStreamRecord` (exported alongside
+  `PlacementStreamRecord` + `STREAM_FIELDS` from `@canvas/redis-scripts`) rather
+  than re-deriving field order.
+
+**Trimming.** `place.lua` never trims (that would drop undrained durability). The
+worker trims/XDELs the stream tail only after a confirmed Convex flush.
+
+**Worker binary seam (remaining child).** The Convex target and the Redis source
+both exist; the worker binary itself (`apps/worker`) + its Compose service are
+the remaining work — tracked as a child of FEN-54. The binary: reads
+`REDIS_URL` + `GATEWAY_CANVAS_ID` (= slug) + `CONVEX_SELF_HOSTED_URL`, drains
+`canvas:{slug}:stream` from `flushState.lastStreamId`, and calls the
+**slug-addressed** `worker:*` functions below (already shipped — args take
+`slug`, not a string `canvasId`).
+
+**Not durable yet:** moderation overwrites (`moderate.lua`) adopt the per-canvas
+keys but do not XADD to the stream, so a wipe/restore applied between snapshots
+is not replayed on restore. Tracked as a follow-up (ADR-0003 § Consequences).
 
 ## Deployment requirement (ADR-0001)
 

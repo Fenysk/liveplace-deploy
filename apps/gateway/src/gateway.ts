@@ -18,6 +18,7 @@ import {
   encodeDelta,
   encodeJson,
   encodeSnapshot,
+  PALETTE_SIZE,
   PROTOCOL_VERSION,
   type ClientMessage,
   type PixelWrite,
@@ -26,6 +27,7 @@ import {
 import { DELTA_CHANNEL, DEFAULT_CANVAS_ID } from "@canvas/redis-scripts";
 import { parseDeltaMessage } from "./schema";
 import type { GatewayConfig } from "./config";
+import { ModerationService, IoredisModerationRedis, ModerationRequestError, parseCells } from "./moderation";
 import { createAuthenticator, AuthError, type AuthedUser, type SocketAuthenticator } from "./auth";
 import { SessionGauge, StaticGaugeBonusSource, type GaugeBonusSource } from "./gaugeBonus";
 import { DeltaCoalescer } from "./coalescer";
@@ -97,6 +99,7 @@ export class Gateway {
   private readonly ring: SeqRingBuffer;
   private readonly http: Server;
   private readonly wss: WebSocketServer;
+  private readonly moderation: ModerationService;
 
   private flushTimer?: ReturnType<typeof setInterval>;
   private presenceTimer?: ReturnType<typeof setInterval>;
@@ -123,6 +126,12 @@ export class Gateway {
       void this.handleHttp(req, res);
     });
     this.wss = new WebSocketServer({ noServer: true });
+    this.moderation = new ModerationService(new IoredisModerationRedis(this.redis.cmd), {
+      canvasId: cfg.canvasId ?? DEFAULT_CANVAS_ID,
+      width: cfg.width,
+      height: cfg.height,
+      paletteSize: PALETTE_SIZE,
+    });
     this.wireUpgrade();
   }
 
@@ -133,11 +142,99 @@ export class Gateway {
    * the health route exists and purchases take effect on the next reconnect.
    */
   private async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (req.method === "POST" && (req.url ?? "").split("?")[0] === "/internal/gauge/refresh") {
+    const path = (req.url ?? "").split("?")[0] ?? "";
+    if (req.method === "POST" && path === "/internal/gauge/refresh") {
       await this.handleGaugeRefresh(req, res);
       return;
     }
+    // Moderation internal seam (F8/FEN-19, docs/contracts/moderation-internal.md).
+    if (req.method === "POST" && path.startsWith("/internal/")) {
+      const handler =
+        path === "/internal/moderate" ? this.handleModerate
+        : path === "/internal/ban" ? this.handleBan
+        : path === "/internal/freeze" ? this.handleFreeze
+        : path === "/internal/flush" ? this.handleFlush
+        : undefined;
+      if (handler) {
+        await this.handleModerationRoute(req, res, handler.bind(this));
+        return;
+      }
+    }
     res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+  }
+
+  /**
+   * Shared envelope for the moderation routes: enforce the Bearer secret, parse
+   * the JSON body, run the per-route handler and serialise its result. A missing
+   * GATEWAY_INTERNAL_SECRET disables the whole seam (404), mirroring the gauge
+   * refresh route — so a misconfigured gateway never silently accepts moderation.
+   */
+  private async handleModerationRoute(
+    req: IncomingMessage,
+    res: ServerResponse,
+    handler: (body: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<void> {
+    const secret = this.cfg.internalSecret;
+    if (!secret) {
+      res.writeHead(404).end("moderation seam disabled");
+      return;
+    }
+    if (req.headers["authorization"] !== `Bearer ${secret}`) {
+      res.writeHead(401).end("unauthorized");
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = (JSON.parse(body || "{}") as Record<string, unknown>) ?? {};
+    } catch {
+      res.writeHead(400).end("malformed body");
+      return;
+    }
+    try {
+      const result = await handler(parsed);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result ?? {}));
+    } catch (err) {
+      const msg = (err as Error).message;
+      // A bad request (validation) is the caller's fault → 400; anything else is ours.
+      const bad = err instanceof ModerationRequestError;
+      res.writeHead(bad ? 400 : 500).end(msg);
+      if (!bad) console.warn(`[gateway] moderation route failed: ${msg}`);
+    }
+  }
+
+  /** `POST /internal/moderate` — apply a Convex-decided bulk overwrite; echo {version}. */
+  private async handleModerate(body: Record<string, unknown>): Promise<{ applied: number; version: number }> {
+    const cells = parseCells(body.cells);
+    const { applied, version } = await this.moderation.moderate(cells);
+    return { applied, version };
+  }
+
+  /** `POST /internal/ban` — (un)ban a user on the hot path (CA6). */
+  private async handleBan(body: Record<string, unknown>): Promise<{ banned: boolean }> {
+    const userId = body.userId;
+    if (typeof userId !== "string" || userId === "") {
+      throw new ModerationRequestError("missing userId");
+    }
+    const banned = body.banned !== false; // default to banning unless explicitly false
+    await this.moderation.setBan(userId, banned);
+    return { banned };
+  }
+
+  /** `POST /internal/freeze` — emergency freeze/unfreeze toggle (F8.4/CA4). */
+  private async handleFreeze(body: Record<string, unknown>): Promise<{ frozen: boolean }> {
+    const frozen = body.frozen === true;
+    await this.moderation.setFrozen(frozen);
+    return { frozen };
+  }
+
+  /** `POST /internal/flush` — best-effort nudge to drain the stream before a mass action. */
+  private async handleFlush(): Promise<{ requested: boolean; awaited: boolean }> {
+    const requested = await this.moderation.requestFlush();
+    // awaited=false: the gateway cannot synchronously await the worker's drain
+    // across processes; durability does not depend on it (see ModerationService).
+    return { requested, awaited: false };
   }
 
   private async handleGaugeRefresh(

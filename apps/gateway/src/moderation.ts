@@ -1,0 +1,200 @@
+/**
+ * The moderation internal seam (F8 / FEN-19) — the gateway side of
+ * docs/contracts/moderation-internal.md. Convex owns the decision + journal
+ * (authz, derive the cells to write, ban/auditLog/overlay records); it then asks
+ * the gateway to apply the Redis side-effects, because Convex never touches Redis
+ * (guardrail G-A1). This module turns each authorised request into the matching
+ * atomic Redis operation:
+ *
+ *   - moderate → one `moderate.lua` call: bulk overwrite + durable XADD per cell
+ *     + coalesced fan-out (one bulkDelta, CA1). Echoes the bumped `version` so
+ *     Convex can stamp `pixelModeration.overwriteVersion`.
+ *   - ban      → SADD/SREM the per-canvas ban set `place.lua` SISMEMBERs, so a
+ *     ban/unban (re)takes effect on the banned user's very next placement (CA6).
+ *   - freeze   → SET/DEL the `canvas:frozen` flag `place.lua` checks before the
+ *     gauge, so a freeze/unfreeze blocks/reopens placement instantly (CA4).
+ *   - flush    → best-effort nudge to the persistence worker to drain the stream
+ *     before a mass action (see ModerationService.requestFlush).
+ *
+ * The Redis surface is behind `ModerationRedis` so the service is unit-tested
+ * without a server (the Lua behaviour itself is proven by the redis-scripts
+ * integration tests), mirroring placement.ts's PlaceScriptRunner.
+ */
+import type Redis from "ioredis";
+import {
+  MODERATE_LUA,
+  moderateArgs,
+  parseModerateResult,
+  canvasKeys,
+  DELTA_CHANNEL,
+  type ModerationCell,
+} from "@canvas/redis-scripts";
+
+/**
+ * Pub/sub channel a moderation flush request is published on. The persistence
+ * worker (FEN-17/FEN-57) subscribes to drain `canvas:{id}:stream` immediately
+ * rather than waiting for its poll tick. Defined here until the worker honours it
+ * (tracked follow-up); publishing with no subscriber is a harmless no-op.
+ */
+export function flushRequestChannel(canvasId: string): string {
+  return `canvas:${canvasId}:flush:request`;
+}
+
+/** Thrown when a moderation request body is malformed → HTTP 400 (caller's fault). */
+export class ModerationRequestError extends Error {}
+
+/**
+ * Validate + coerce the `cells` field of a `/internal/moderate` body into the
+ * `ModerationCell[]` moderate.lua expects. Convex has already decided the
+ * colours, but we never trust an external body blindly: each cell must be three
+ * finite integers, else it is a 400 (not a partial/garbage Redis write).
+ */
+export function parseCells(raw: unknown): ModerationCell[] {
+  if (!Array.isArray(raw)) throw new ModerationRequestError("cells must be an array");
+  return raw.map((c, i) => {
+    const cell = c as { x?: unknown; y?: unknown; color?: unknown };
+    const x = cell.x, y = cell.y, color = cell.color;
+    if (
+      !Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(color)
+    ) {
+      throw new ModerationRequestError(`cells[${i}] must have integer x,y,color`);
+    }
+    return { x: x as number, y: y as number, color: color as number };
+  });
+}
+
+/** The Redis operations the moderation seam needs. Injectable for testing. */
+export interface ModerationRedis {
+  /** EVAL/EVALSHA moderate.lua; returns its raw [applied, lastSeq] reply. */
+  evalModerate(keys: readonly string[], argv: readonly string[]): Promise<unknown>;
+  set(key: string, value: string): Promise<unknown>;
+  del(key: string): Promise<unknown>;
+  sadd(key: string, member: string): Promise<unknown>;
+  srem(key: string, member: string): Promise<unknown>;
+  publish(channel: string, payload: string): Promise<unknown>;
+}
+
+/**
+ * ioredis-backed `ModerationRedis`. Loads moderate.lua once (SCRIPT LOAD) and
+ * runs it via EVALSHA, reloading + retrying once on NOSCRIPT — same hot-path
+ * discipline as IoredisPlaceRunner. The key COUNT is `keys.length` per call
+ * because moderateArgs returns a variable KEYS arity (the optional stream slot).
+ */
+export class IoredisModerationRedis implements ModerationRedis {
+  private sha?: string;
+
+  constructor(private readonly cmd: Redis) {}
+
+  private get r(): {
+    script: (sub: "LOAD", lua: string) => Promise<string>;
+    evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+  } {
+    return this.cmd as unknown as {
+      script: (sub: "LOAD", lua: string) => Promise<string>;
+      evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+    };
+  }
+
+  async evalModerate(keys: readonly string[], argv: readonly string[]): Promise<unknown> {
+    const args = [...keys, ...argv].map(String);
+    if (this.sha === undefined) this.sha = await this.r.script("LOAD", MODERATE_LUA);
+    try {
+      return await this.r.evalsha(this.sha, keys.length, ...args);
+    } catch (err) {
+      if (!/NOSCRIPT/.test((err as Error).message)) throw err;
+      this.sha = await this.r.script("LOAD", MODERATE_LUA);
+      return this.r.evalsha(this.sha, keys.length, ...args);
+    }
+  }
+
+  set(key: string, value: string): Promise<unknown> {
+    return this.cmd.set(key, value);
+  }
+  del(key: string): Promise<unknown> {
+    return this.cmd.del(key);
+  }
+  sadd(key: string, member: string): Promise<unknown> {
+    return this.cmd.sadd(key, member);
+  }
+  srem(key: string, member: string): Promise<unknown> {
+    return this.cmd.srem(key, member);
+  }
+  publish(channel: string, payload: string): Promise<unknown> {
+    return this.cmd.publish(channel, payload);
+  }
+}
+
+export interface ModerationConfig {
+  /** Canvas id (= slug, ADR-0003) whose per-canvas keys all ops address. */
+  canvasId: string;
+  width: number;
+  height: number;
+  paletteSize: number;
+  /** Fan-out channel (defaults to DELTA_CHANNEL). */
+  deltaChannel?: string;
+  /** Injectable clock (defaults to Date.now) so stream `ts` is deterministic in tests. */
+  now?: () => number;
+}
+
+export interface ModerateOutcome {
+  /** Cells actually written (applied < cells.length ⇒ a malformed batch from Convex). */
+  applied: number;
+  /** The bumped version of the last applied cell — echoed to Convex as `version`. */
+  version: number;
+}
+
+export class ModerationService {
+  private readonly now: () => number;
+
+  constructor(
+    private readonly redis: ModerationRedis,
+    private readonly cfg: ModerationConfig,
+  ) {
+    this.now = cfg.now ?? Date.now;
+  }
+
+  /** F8.1/F8.2/F8.3 — apply a Convex-decided bulk overwrite atomically. */
+  async moderate(cells: ReadonlyArray<ModerationCell>): Promise<ModerateOutcome> {
+    const { keys, argv } = moderateArgs({
+      width: this.cfg.width,
+      height: this.cfg.height,
+      paletteSize: this.cfg.paletteSize,
+      canvasId: this.cfg.canvasId,
+      cells,
+      deltaChannel: this.cfg.deltaChannel ?? DELTA_CHANNEL,
+      // The moderation HTTP seam carries no per-moderator id; the real actor is
+      // recorded in the Convex auditLog. Stream records are stamped system ("").
+      actorUserId: "",
+      nowMs: this.now(),
+    });
+    const r = parseModerateResult(await this.redis.evalModerate(keys, argv));
+    return { applied: r.applied, version: r.lastSeq };
+  }
+
+  /** F8.4 — emergency freeze toggle (place.lua checks the flag before the gauge). */
+  async setFrozen(frozen: boolean): Promise<void> {
+    const key = canvasKeys(this.cfg.canvasId).frozen;
+    if (frozen) await this.redis.set(key, "1");
+    else await this.redis.del(key);
+  }
+
+  /** CA6 — (un)ban a user on the hot path; place.lua rejects a member's next place. */
+  async setBan(userId: string, banned: boolean): Promise<void> {
+    const key = canvasKeys(this.cfg.canvasId).bans;
+    if (banned) await this.redis.sadd(key, userId);
+    else await this.redis.srem(key, userId);
+  }
+
+  /**
+   * Best-effort flush nudge before a mass action: publish a request the worker
+   * drains on. It is BEST-EFFORT — the gateway cannot await the worker's drain
+   * across processes — but correctness does not depend on it: moderate.lua now
+   * streams overwrites durably and in version order (see Part A), so the worker
+   * persists everything eventually regardless. Flush only narrows the freshness
+   * window for Convex's derive-underneath. Returns true if the nudge was sent.
+   */
+  async requestFlush(): Promise<boolean> {
+    await this.redis.publish(flushRequestChannel(this.cfg.canvasId), "1");
+    return true;
+  }
+}
