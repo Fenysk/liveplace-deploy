@@ -1,5 +1,6 @@
 import { LanguageSwitcher, useTranslate } from "@canvas/i18n/react";
 import { AuthButton } from "./auth/AuthButton.js";
+import { Link } from "./router.js";
 
 /**
  * Minimal app shell. Every visible string goes through `t(...)` so the whole
@@ -22,7 +23,7 @@ export function App(): React.ReactElement {
 
       <nav aria-label={t("nav.canvas")} style={{ display: "flex", gap: "1rem", marginTop: "1.5rem" }}>
         <a href="#canvas">{t("nav.canvas")}</a>
-        <a href="#gallery">{t("nav.gallery")}</a>
+        <Link to="/gallery">{t("nav.gallery")}</Link>
         <a href="#leaderboard">{t("nav.leaderboard")}</a>
         <a href="#profile">{t("nav.profile")}</a>
       </nav>

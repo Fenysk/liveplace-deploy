@@ -1,8 +1,8 @@
 import { I18nProvider } from "@canvas/i18n/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.js";
 import { ConvexAuthProvider } from "./auth/ConvexAuthProvider.js";
+import { Router } from "./router.js";
 import { i18n } from "./i18n.js";
 
 const root = document.getElementById("root");
@@ -12,7 +12,7 @@ createRoot(root).render(
   <StrictMode>
     <I18nProvider i18n={i18n}>
       <ConvexAuthProvider>
-        <App />
+        <Router />
       </ConvexAuthProvider>
     </I18nProvider>
   </StrictMode>,
