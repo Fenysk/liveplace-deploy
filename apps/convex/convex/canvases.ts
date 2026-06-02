@@ -25,6 +25,7 @@ import {
   slugify,
   type CanvasShape,
   type PlacementDecision,
+  type PlacementDenyReason,
 } from "./lib/canvasRules";
 import { planGalleryFieldsPatch } from "./lib/gallery";
 
@@ -407,7 +408,10 @@ export const canPlace = query({
       ),
     ),
   }),
-  handler: async (ctx, args): Promise<{ allowed: boolean; reason?: string }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ allowed: boolean; reason?: PlacementDenyReason | "canvas_not_found" }> => {
     const canvas = await ctx.db.get(args.canvasId);
     if (!canvas) return { allowed: false, reason: "canvas_not_found" };
     const userId = await optionalUserId(ctx);

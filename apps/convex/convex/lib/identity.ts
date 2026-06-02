@@ -6,10 +6,13 @@
  * standard Convex auth identity (`ctx.auth.getUserIdentity()`), whose `subject`
  * is the Better Auth user id used as `ownerId` throughout the schema (§6.1).
  */
-import type { GenericQueryCtx } from "convex/server";
-import type { DataModel } from "../_generated/dataModel";
+import type { Auth } from "convex/server";
 
-type Ctx = GenericQueryCtx<DataModel>;
+// These helpers only read the request identity (`ctx.auth`), never the database,
+// so they accept any Convex context — query, mutation, *or* action. Typing the
+// parameter structurally (rather than as GenericQueryCtx) lets action handlers
+// (e.g. the F8 moderation actions) call them without a ctx-shape mismatch.
+type Ctx = { auth: Auth };
 
 /** Resolve the authenticated user id, or throw if the request is anonymous. */
 export async function requireUserId(ctx: Ctx): Promise<string> {

@@ -48,7 +48,12 @@ interface TwitchProfile {
  * how the app-side `profiles` row is created transactionally on first sign-in
  * (CA1); `onDelete` keeps it consistent if the identity is removed.
  */
-export const authComponent = createClient<DataModel>(components.betterAuth, {
+// The explicit annotation breaks a type-inference cycle: `authFunctions` below
+// references `internal.auth.{onCreate,…}`, whose generated types derive from
+// `authComponent.triggersApi()` — i.e. from `authComponent` itself. Annotating
+// the binding lets TS resolve the client type without chasing that cycle
+// (otherwise TS7022: implicitly `any`, referenced in its own initializer).
+export const authComponent: ReturnType<typeof createClient<DataModel>> = createClient<DataModel>(components.betterAuth, {
   triggers: {
     user: {
       onCreate: async (ctx, authUser) => {

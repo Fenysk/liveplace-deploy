@@ -95,13 +95,15 @@ export function planWipe(
   const plans: RemovalPlan[] = [];
   for (const stack of groupByCell(placements).values()) {
     const top = stack[stack.length - 1];
+    if (!top) continue; // groupByCell only yields non-empty stacks; satisfies noUncheckedIndexedAccess
     if (top.userId !== targetUserId) continue;
     if (top.color === 0) continue;
     // Walk down past any run of the banned user's own pixels to what shows next.
     let underneath = 0;
     for (let i = stack.length - 2; i >= 0; i--) {
-      if (stack[i].userId !== targetUserId) {
-        underneath = stack[i].color;
+      const below = stack[i];
+      if (below && below.userId !== targetUserId) {
+        underneath = below.color;
         break;
       }
     }
@@ -137,14 +139,16 @@ export function planDelete(
     const stack = groups.get(key);
     if (!stack || stack.length === 0) continue;
     const top = stack[stack.length - 1];
+    if (!top) continue; // length checked above; satisfies noUncheckedIndexedAccess
     if (top.color === 0) continue;
+    const below = stack[stack.length - 2];
     plans.push({
       x: top.x,
       y: top.y,
       removedUserId: top.userId,
       removedColor: top.color,
       removedVersion: top.version,
-      underneathColor: stack.length >= 2 ? stack[stack.length - 2].color : 0,
+      underneathColor: below ? below.color : 0,
     });
   }
   return sortPlans(plans);

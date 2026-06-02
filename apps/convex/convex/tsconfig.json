@@ -21,5 +21,8 @@
     "noEmit": true
   },
   "include": ["./**/*"],
-  "exclude": ["./_generated"]
+  /* *.test.ts run under Node's native test runner (node:test) with TS
+   * type-stripping, which requires explicit `.ts` import extensions — incompatible
+   * with this Convex typecheck. They carry no Convex functions, so exclude them. */
+  "exclude": ["./_generated", "./**/*.test.ts"]
 }
