@@ -18,20 +18,35 @@
  *
  * See docs/contracts/gallery-read.md.
  *
- * INTEGRATION (shared gate, same as ProfilePage / FEN-22):
- *   - `api` needs the Convex package to expose its generated api
- *     (`@canvas/convex/api`) — `convex codegen` + a `./api` export. Owned by
- *     Dev Full-stack; tracked alongside the gallery data layer (FEN-23).
- *   - Mount under the web shell so `nav.gallery` (`#gallery`) renders this page.
- *     A one-line switch in App.tsx is all that's needed once the api resolves.
+ * The query is referenced BY NAME via `makeFunctionReference` rather than the
+ * generated `@canvas/convex/api`, so the web build stays decoupled from any
+ * committed `convex codegen` output — the same web↔Convex calling convention the
+ * leaderboard panel established (FEN-32). The Convex client is provided app-wide
+ * by `ConvexAuthProvider` (main.tsx). Mounted in the app shell under `#gallery`.
  */
 import { usePaginatedQuery } from "convex/react";
-import { api } from "@canvas/convex/api";
+import { makeFunctionReference, type PaginationOptions, type PaginationResult } from "convex/server";
 import { useTranslate, useLocale } from "@canvas/i18n/react";
-import { buildGalleryView, type GalleryCardView, type GalleryPage as GalleryEnvelope } from "./galleryView.js";
+import {
+  buildGalleryView,
+  type GalleryCardView,
+  type GalleryItem,
+  type GalleryPage as GalleryEnvelope,
+} from "./galleryView.js";
 
 /** How many cards to fetch per page (CA1 feed; "load more" pulls the next page). */
 const PAGE_SIZE = 24;
+
+/**
+ * `gallery:listPublicCanvases` referenced by name (`module:function`). Arg and
+ * return types mirror the gallery-read contract so `results` stays typed as
+ * `GalleryItem[]` without pulling in the generated api.
+ */
+const listPublicCanvases = makeFunctionReference<
+  "query",
+  { paginationOpts: PaginationOptions },
+  PaginationResult<GalleryItem>
+>("gallery:listPublicCanvases");
 
 export function GalleryPage(): React.ReactElement {
   const t = useTranslate();
@@ -41,7 +56,7 @@ export function GalleryPage(): React.ReactElement {
   // so we pass `{}`. It accumulates `results` across pages and exposes a status
   // we map back onto the view-model's single-page envelope shape.
   const { results, status, loadMore } = usePaginatedQuery(
-    api.gallery.listPublicCanvases,
+    listPublicCanvases,
     {},
     { initialNumItems: PAGE_SIZE },
   );
