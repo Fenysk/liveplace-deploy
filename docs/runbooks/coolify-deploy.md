@@ -34,7 +34,22 @@ node scripts/make-deploy-bundle.mjs      # → dist/liveplace-deploy.tar.gz
 ```
 
 That tarball is `git archive HEAD` — git-tracked files only, no `node_modules`,
-no `.env`, no secrets, no history. Seed the public repo from it (one-time):
+no `.env`, no secrets, no history.
+
+**Agent-only path (recommended).** With a `GITHUB_TOKEN` (PAT, `repo` /
+`contents:write`) in the env, one command does the whole one-time provisioning —
+create the public repo, build the bundle, push it, and write
+`COOLIFY_GIT_REPOSITORY` into `deploy.env`:
+
+```bash
+node scripts/coolify-wire-source.mjs    # → ✅ source wired: https://github.com/<owner>/liveplace-deploy.git
+node scripts/coolify-deploy.mjs         # → guardrail → push env → deploy → smoke
+```
+
+The token is never printed and never stored in the remote URL or argv (git reads
+it via a one-shot `GIT_ASKPASS` helper). Re-running re-pushes the latest tree.
+
+**Manual fallback** (no PAT / different host), same secret-free bytes:
 
 ```bash
 mkdir /tmp/lp && tar -xzf dist/liveplace-deploy.tar.gz -C /tmp/lp
