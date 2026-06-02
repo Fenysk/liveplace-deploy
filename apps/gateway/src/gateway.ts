@@ -84,7 +84,7 @@ const rejectingPlacementHandler: PlacementHandler = {
       t: "error",
       code: "internal",
       message: "placement not enabled yet (pending F4 validation)",
-      seq: msg.seq,
+      cid: msg.cid,
     });
   },
 };
@@ -388,7 +388,7 @@ export class Gateway {
             t: "error",
             code: "unauthenticated",
             message: "sign in to place pixels",
-            seq: msg.seq,
+            cid: msg.cid,
           });
           return;
         }

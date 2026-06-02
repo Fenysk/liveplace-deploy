@@ -114,6 +114,9 @@ export interface PlacementConfig {
 /** Default lifetime of an idempotency claim — comfortably covers a reconnect resend. */
 export const DEFAULT_OP_TTL_MS = 60_000;
 
+/** Upper bound on a client `cid` we will key Redis on — keeps the op key bounded. */
+export const MAX_CID_LEN = 128;
+
 /**
  * The F5 placement handler. One client `place` → one atomic `place.lua` → one
  * protocol reply:
@@ -126,9 +129,10 @@ export const DEFAULT_OP_TTL_MS = 60_000;
  *                     code — a dedicated code is the FE's protocol call, see FEN-19)
  *   - banned (CA6)  → `error { banned }`
  *
- * Idempotency (CA5): when the client tags a placement with a positive `seq`, the
- * script claims a per-op key so a resend (e.g. an optimistic client replaying an
- * un-acked placement after a reconnect) places exactly once.
+ * Idempotency (CA5): when the client tags a placement with an opaque `cid`, the
+ * script claims a per-(canvas,user,cid) key so a resend (e.g. an optimistic client
+ * replaying an un-acked placement after a reconnect) places exactly once. The
+ * ratified op id is `cid`, not the old server-authoritative `seq` (FEN-63).
  */
 export class RedisPlacementHandler implements PlacementHandler {
   constructor(
@@ -149,7 +153,7 @@ export class RedisPlacementHandler implements PlacementHandler {
         t: "error",
         code: "unauthenticated",
         message: "sign in to place pixels",
-        seq: msg.seq,
+        cid: msg.cid,
       });
       return;
     }
@@ -157,12 +161,13 @@ export class RedisPlacementHandler implements PlacementHandler {
     // Effective max = canvas base + this user's resolved F6 bonus (FEN-27). Read
     // per call so a just-raised bonus lifts the ceiling immediately (D1 CA3).
     const gauge: GaugeParams = { ...this.cfg.gauge, gaugeMax: conn.gauge.effectiveGaugeMax };
-    // Idempotency key (CA5): the client's `place.seq` correlation, used ONLY when
-    // it is a stable positive integer. A naive client that omits it (or sends 0)
-    // gets no dedup — every place is independent, exactly as before.
+    // Idempotency key (CA5): the client's opaque `cid` (FEN-63), used ONLY when it
+    // is a present, non-empty, bounded string. A naive client that omits it gets
+    // no dedup — every place is independent. An over-long `cid` disables dedup
+    // rather than truncating, so two distinct ops can never collide on a clipped key.
     const opId =
-      typeof msg.seq === "number" && Number.isInteger(msg.seq) && msg.seq > 0
-        ? String(msg.seq)
+      typeof msg.cid === "string" && msg.cid.length > 0 && msg.cid.length <= MAX_CID_LEN
+        ? msg.cid
         : "";
     const { keys, argv } = placeArgs({
       x: msg.x,
@@ -184,17 +189,22 @@ export class RedisPlacementHandler implements PlacementHandler {
     try {
       result = parsePlaceResult(await this.runner.run(keys, argv));
     } catch (err) {
-      conn.sendJson({ t: "error", code: "internal", message: "placement failed", seq: msg.seq });
+      conn.sendJson({ t: "error", code: "internal", message: "placement failed", cid: msg.cid });
       console.warn(`[gateway] place script failed for ${userId}: ${(err as Error).message}`);
       return;
     }
 
     switch (result.status) {
       case "ok":
-        // ack carries the gauge so the client can render current/max + countdown.
+        // ack carries the gauge so the client can render current/max + countdown,
+        // and echoes `cid` (FEN-63, the ratified correlation) so an optimistic
+        // client commits the right pending pixel. `seq` is the deprecated
+        // transitional echo of the client's pre-FEN-63 op id, kept so a
+        // not-yet-migrated client still reconciles (drop once FEN-60 moves to cid).
         conn.sendJson({
           t: "ack",
           seq: msg.seq ?? 0,
+          cid: msg.cid,
           charges: result.charges,
           max: result.max,
           cooldownUntil: result.cooldownUntil,
@@ -204,17 +214,17 @@ export class RedisPlacementHandler implements PlacementHandler {
         conn.sendJson({ t: "cooldown", until: result.cooldownUntil });
         return;
       case "out_of_bounds":
-        conn.sendJson({ t: "error", code: "out_of_bounds", message: "pixel out of bounds", seq: msg.seq });
+        conn.sendJson({ t: "error", code: "out_of_bounds", message: "pixel out of bounds", cid: msg.cid });
         return;
       case "invalid_color":
-        conn.sendJson({ t: "error", code: "invalid_color", message: "invalid palette colour", seq: msg.seq });
+        conn.sendJson({ t: "error", code: "invalid_color", message: "invalid palette colour", cid: msg.cid });
         return;
       case "frozen":
         conn.sendJson({
           t: "error",
           code: "rate_limited",
           message: "the canvas is frozen by a moderator",
-          seq: msg.seq,
+          cid: msg.cid,
         });
         return;
       case "banned":
@@ -224,11 +234,11 @@ export class RedisPlacementHandler implements PlacementHandler {
           t: "error",
           code: "banned",
           message: "you are banned from this canvas",
-          seq: msg.seq,
+          cid: msg.cid,
         });
         return;
       default:
-        conn.sendJson({ t: "error", code: "internal", message: "unknown placement result", seq: msg.seq });
+        conn.sendJson({ t: "error", code: "internal", message: "unknown placement result", cid: msg.cid });
     }
   }
 }

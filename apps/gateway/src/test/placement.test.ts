@@ -51,18 +51,22 @@ function fakeConn(opts: { userId: string | null; effectiveGaugeMax: number }): C
   } as unknown as Connection & { sent: ServerMessage[] };
 }
 
+const CID = "sess-abc:7";
+
 const place = (over: Partial<Extract<ClientMessage, { t: "place" }>> = {}): Extract<
   ClientMessage,
   { t: "place" }
-> => ({ t: "place", x: 1, y: 2, color: 3, seq: 42, ...over });
+> => ({ t: "place", x: 1, y: 2, color: 3, cid: CID, ...over });
 
-test("ok ⇒ ack carrying the post-consume gauge state", async () => {
+test("ok ⇒ ack carrying the post-consume gauge state + echoed cid", async () => {
   const runner = fakeRunner(["ok", 19, 23, NOW + 30_000]);
   const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 23 });
   await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place());
 
+  // FEN-63: ack echoes the client's opaque `cid`; `seq` is the gateway global
+  // frame seq (0 here — assigned downstream on the broadcast delta, not synchronously).
   assert.deepEqual(conn.sent, [
-    { t: "ack", seq: 42, charges: 19, max: 23, cooldownUntil: NOW + 30_000 },
+    { t: "ack", seq: 0, cid: CID, charges: 19, max: 23, cooldownUntil: NOW + 30_000 },
   ]);
 });
 
@@ -87,17 +91,17 @@ test("cooldown ⇒ cooldown { until } (empty gauge)", async () => {
   assert.deepEqual(conn.sent, [{ t: "cooldown", until: NOW + 30_000 }]);
 });
 
-test("out_of_bounds / invalid_color ⇒ matching error frames (with seq)", async () => {
+test("out_of_bounds / invalid_color ⇒ matching error frames (with echoed cid)", async () => {
   const oob = fakeConn({ userId: "u", effectiveGaugeMax: 20 });
   await new RedisPlacementHandler(fakeRunner(["out_of_bounds", 0, 0, 0]), CFG, clock).handlePlace(oob, place());
   assert.deepEqual(oob.sent, [
-    { t: "error", code: "out_of_bounds", message: "pixel out of bounds", seq: 42 },
+    { t: "error", code: "out_of_bounds", message: "pixel out of bounds", cid: CID },
   ]);
 
   const bad = fakeConn({ userId: "u", effectiveGaugeMax: 20 });
   await new RedisPlacementHandler(fakeRunner(["invalid_color", 0, 0, 0]), CFG, clock).handlePlace(bad, place());
   assert.deepEqual(bad.sent, [
-    { t: "error", code: "invalid_color", message: "invalid palette colour", seq: 42 },
+    { t: "error", code: "invalid_color", message: "invalid palette colour", cid: CID },
   ]);
 });
 
@@ -115,7 +119,7 @@ test("anonymous user is rejected and never reaches the script", async () => {
 
   assert.equal(runner.calls.length, 0, "the script must not run without a user key");
   assert.deepEqual(conn.sent, [
-    { t: "error", code: "unauthenticated", message: "sign in to place pixels", seq: 42 },
+    { t: "error", code: "unauthenticated", message: "sign in to place pixels", cid: CID },
   ]);
 });
 
@@ -128,49 +132,60 @@ test("a script failure is contained as an internal error, not a throw", async ()
   };
   await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place());
   assert.deepEqual(conn.sent, [
-    { t: "error", code: "internal", message: "placement failed", seq: 42 },
+    { t: "error", code: "internal", message: "placement failed", cid: CID },
   ]);
 });
 
-test("ack falls back to seq 0 when the client omitted its correlation id", async () => {
+test("ack omits cid (seq 0) when the client placed without a correlation id", async () => {
   const conn = fakeConn({ userId: "u", effectiveGaugeMax: 20 });
   await new RedisPlacementHandler(fakeRunner(["ok", 19, 20, 0]), CFG, clock).handlePlace(
     conn,
-    place({ seq: undefined }),
+    place({ cid: undefined }),
   );
-  assert.equal((conn.sent[0] as { seq: number }).seq, 0);
+  const ack = conn.sent[0] as { seq: number; cid?: string };
+  assert.equal(ack.seq, 0);
+  assert.equal(ack.cid, undefined, "no cid echoed when the client didn't tag the placement");
 });
 
 test("banned (CA6) ⇒ error { banned } (first-class ws code)", async () => {
   const conn = fakeConn({ userId: "u", effectiveGaugeMax: 20 });
   await new RedisPlacementHandler(fakeRunner(["banned", 0, 20, 0]), CFG, clock).handlePlace(conn, place());
   assert.deepEqual(conn.sent, [
-    { t: "error", code: "banned", message: "you are banned from this canvas", seq: 42 },
+    { t: "error", code: "banned", message: "you are banned from this canvas", cid: CID },
   ]);
 });
 
-test("CA5: a positive client seq becomes the per-op idempotency claim key", async () => {
+test("CA5: an opaque client cid becomes the per-op idempotency claim key (FEN-63)", async () => {
   const runner = fakeRunner(["ok", 19, 20, 0]);
   const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
-  await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ seq: 42 }));
+  await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ cid: CID }));
 
   // placeArgs KEYS order: [pixels, gauge, meta, frozen, stream, bans, op].
   const { keys, argv } = runner.calls[0]!;
   assert.equal(keys[5], "canvas:default:bans", "the per-canvas ban set is always passed (CA6)");
-  assert.equal(keys[6], "canvas:default:op:user-7:42", "op claim key is namespaced by canvas/user/op");
-  assert.equal(argv[13], "42", "opId ARGV is the client seq");
+  assert.equal(keys[6], `canvas:default:op:user-7:${CID}`, "op claim key is namespaced by canvas/user/cid");
+  assert.equal(argv[13], CID, "opId ARGV is the client cid");
   assert.ok(Number(argv[14]) > 0, "a positive op TTL is supplied");
 });
 
-test("CA5: no idempotency when seq is absent or non-positive (naive client keeps placing)", async () => {
-  for (const seq of [undefined, 0, -3]) {
+test("CA5: no idempotency when cid is absent or empty (naive client keeps placing)", async () => {
+  for (const cid of [undefined, ""]) {
     const runner = fakeRunner(["ok", 19, 20, 0]);
     const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
-    await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ seq }));
+    await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ cid }));
     const { keys, argv } = runner.calls[0]!;
-    assert.equal(keys[6], "", `op key empty for seq=${String(seq)} → idempotency off`);
+    assert.equal(keys[6], "", `op key empty for cid=${JSON.stringify(cid)} → idempotency off`);
     assert.equal(argv[13], "", "opId ARGV empty");
   }
+});
+
+test("CA5: an over-long cid disables idempotency rather than keying an unbounded op key", async () => {
+  const runner = fakeRunner(["ok", 19, 20, 0]);
+  const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
+  await new RedisPlacementHandler(runner, CFG, clock).handlePlace(conn, place({ cid: "x".repeat(200) }));
+  const { keys, argv } = runner.calls[0]!;
+  assert.equal(keys[6], "", "over-long cid → no op claim (no clipped-key collisions)");
+  assert.equal(argv[13], "", "opId ARGV empty for an over-long cid");
 });
 
 test("places under the gateway's configured canvas id (CA6 ban set agrees with pixels)", async () => {
@@ -178,10 +193,10 @@ test("places under the gateway's configured canvas id (CA6 ban set agrees with p
   const conn = fakeConn({ userId: "user-7", effectiveGaugeMax: 20 });
   await new RedisPlacementHandler(runner, { ...CFG, canvasId: "liveplace" }, clock).handlePlace(
     conn,
-    place({ seq: 7 }),
+    place({ cid: "op-7" }),
   );
   const { keys } = runner.calls[0]!;
   assert.equal(keys[0], "canvas:liveplace:pixels");
   assert.equal(keys[5], "canvas:liveplace:bans");
-  assert.equal(keys[6], "canvas:liveplace:op:user-7:7");
+  assert.equal(keys[6], "canvas:liveplace:op:user-7:op-7");
 });

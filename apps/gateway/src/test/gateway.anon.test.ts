@@ -106,13 +106,13 @@ test("tokenless visitor is admitted read-only: welcome, then place ⇒ unauthent
     const welcome = await waitFor(ws, texts, (m) => m.t === "welcome");
     assert.equal(welcome.t, "welcome");
 
-    send(ws, { t: "place", x: 1, y: 1, color: 3, seq: 42 });
+    send(ws, { t: "place", x: 1, y: 1, color: 3, cid: "anon-op-1" });
     const err = await waitFor(ws, texts, (m) => m.t === "error");
     assert.deepEqual(err, {
       t: "error",
       code: "unauthenticated",
       message: "sign in to place pixels",
-      seq: 42,
+      cid: "anon-op-1",
     });
     assert.deepEqual(placed, [], "anonymous place must never reach the placement handler");
     ws.close();

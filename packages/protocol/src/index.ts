@@ -77,7 +77,23 @@ export function isInBounds(x: number, y: number, width = CANVAS_WIDTH, height = 
 
 /** Client → Server messages (sent as JSON text frames). */
 export type ClientMessage =
-  | { t: "place"; x: number; y: number; color: number; seq?: number }
+  /**
+   * Request a placement; gauge-gated. `cid` is the OPAQUE client-generated op id
+   * (a UUID or `${sessionId}:${n}`), echoed back in `ack`/`error` so an optimistic
+   * client can reconcile (commit/rollback) its pending pixel. It is ALSO the CA5
+   * idempotency key: a resend of the same `cid` places exactly once (no 2nd gauge
+   * consume / fan-out). Ratified by the WS-protocol owner (FEN-63, contract
+   * `1aa494a`) in place of the former server-authoritative `seq` — a client can't
+   * learn `seq` before its ack, and a restart-resettable counter could false-replay.
+   * Additive & optional: a naive client that omits `cid` gets no dedup/echo.
+   *
+   * `seq` is the DEPRECATED transitional op id (the pre-FEN-63 optimistic client
+   * tagged placements with a client-local integer). The gateway no longer keys
+   * idempotency on it — `cid` does — but still echoes it on `ack`/`error` so a
+   * not-yet-migrated client keeps reconciling. Removed once the web client moves
+   * to `cid` (FEN-60).
+   */
+  | { t: "place"; x: number; y: number; color: number; cid?: string; seq?: number }
   | { t: "ping" }
   /**
    * Reconnect resync request. `seq` is the highest delta sequence the client
@@ -128,7 +144,14 @@ export type ServerMessage =
        */
       seq: number;
     }
-  | ({ t: "ack"; seq: number } & GaugeState)
+  /**
+   * Sender's own placement accepted, with the post-consume gauge. `cid` echoes
+   * the `place` op id (FEN-63) so an optimistic client commits the right pending
+   * pixel — it is the ratified correlation. `seq` is the DEPRECATED transitional
+   * echo of the client's pre-FEN-63 integer op id, kept so a not-yet-migrated
+   * client (FEN-60) still reconciles; 0 when the client sent none.
+   */
+  | ({ t: "ack"; seq: number; cid?: string } & GaugeState)
   | { t: "cooldown"; until: number }
   /**
    * Unsolicited gauge refresh (e.g. after a passive refill tick or an upgrade
@@ -144,7 +167,14 @@ export type ServerMessage =
    * follows immediately; the client should replace its canvas, not reload the page.
    */
   | { t: "resyncRequired" }
-  | { t: "error"; code: ErrorCode; message: string; seq?: number }
+  /**
+   * A rejected placement (→ client rollback) or a transport-level error. `cid`
+   * echoes the rejected `place` op id (FEN-63) when the error pertains to a
+   * placement, so an optimistic client can roll back exactly the pending pixel it
+   * tagged; omitted for errors not tied to a `place` (e.g. malformed frame). `seq`
+   * is the DEPRECATED transitional echo for the pre-FEN-60 client (see `place`).
+   */
+  | { t: "error"; code: ErrorCode; message: string; cid?: string; seq?: number }
   | { t: "pong" };
 
 export function encodeJson(msg: ClientMessage | ServerMessage): string {

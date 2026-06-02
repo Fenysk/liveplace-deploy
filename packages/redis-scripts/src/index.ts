@@ -117,10 +117,12 @@ export function canvasKeys(canvasId: string): CanvasKeys {
  * client op (e.g. an optimistic client resending an un-acked placement after a
  * reconnect) finds the key already set and is answered with the prior `ok`
  * WITHOUT consuming a second charge or fanning out a second delta — so one
- * client op places exactly once. The `opId` is the client-supplied `place.seq`
- * correlation (only used as an idempotency key when it is a positive integer;
- * a naive client that omits it keeps placing normally). Short-TTL'd: it only
- * needs to outlive the client's retry window, not be a permanent record.
+ * client op places exactly once. The `opId` is the client-supplied opaque `cid`
+ * (FEN-63: a UUID or `${sessionId}:${n}`, gateway-mapped from `place.cid`; only
+ * used as an idempotency key when present and non-empty — a naive client that
+ * omits it keeps placing normally). `opId` is treated as an opaque string here,
+ * so this layer is agnostic to whether it is a `cid` or any other op token.
+ * Short-TTL'd: it only needs to outlive the client's retry window, not be permanent.
  */
 export function userOpKey(canvasId: string, userId: string, opId: string): string {
   return `canvas:${canvasId}:op:${userId}:${opId}`;
@@ -256,10 +258,10 @@ export function parsePeekResult(raw: unknown): PeekResult {
  * serving a specific canvas (GATEWAY_CANVAS_ID set) MUST pass it so placements
  * land on the SAME per-canvas keys the gateway's snapshot read uses.
  *
- * `opId` is the client's `place.seq` correlation (F4 CA5). Pass it ONLY when it
- * is a stable per-placement id (a positive integer); omit/leave empty for a
- * naive client and idempotency is simply not engaged. When empty the op KEYS
- * slot is `""` and the script skips the claim. `opTtlMs` bounds how long a
+ * `opId` is the client's opaque `cid` correlation (F4 CA5, FEN-63). Pass it ONLY
+ * when it is a stable per-placement id (a non-empty opaque string); omit/leave
+ * empty for a naive client and idempotency is simply not engaged. When empty the
+ * op KEYS slot is `""` and the script skips the claim. `opTtlMs` bounds how long a
  * claim is remembered (the client's retry window); 0 = no expiry.
  */
 export function placeArgs(opts: {

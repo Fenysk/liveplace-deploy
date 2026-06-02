@@ -127,10 +127,15 @@ test("place.lua F4: ban enforcement (CA6) + idempotency (CA5) against live Redis
   const op = `op-${process.pid}`;
   const W = 16, H = 16;
   const P = { ...DEFAULT_GAUGE, refillIntervalMs: 1000, gaugeMax: 5 };
+  // FEN-63: the op id is the client's opaque `cid` (e.g. `${sessionId}:${n}`),
+  // not a bare integer — exercise the colon-bearing form so the (canvas,user,cid)
+  // key is proven robust to opaque strings.
+  const cid1 = "sess-A:1";
+  const cid2 = "sess-A:2";
   const keysToClear = [
     K.pixels, K.meta, K.stream, K.bans,
     userGaugeKey(banned), userGaugeKey(op),
-    `canvas:${canvasId}:op:${op}:7`, `canvas:${canvasId}:op:${op}:8`,
+    `canvas:${canvasId}:op:${op}:${cid1}`, `canvas:${canvasId}:op:${op}:${cid2}`,
   ];
 
   t.after(async () => {
@@ -159,20 +164,20 @@ test("place.lua F4: ban enforcement (CA6) + idempotency (CA5) against live Redis
   r = await place({ x: 0, y: 0, color: 5, nowMs: t0, userId: banned });
   assert.equal(r.status, "ok", "unbanned user places again");
 
-  // CA5: same opId places exactly once — a replay returns ok WITHOUT consuming a
+  // CA5: same cid places exactly once — a replay returns ok WITHOUT consuming a
   // second charge or incrementing the version a second time.
-  const first = await place({ x: 1, y: 1, color: 5, nowMs: t0, userId: op, opId: "7", opTtlMs: 60_000 });
+  const first = await place({ x: 1, y: 1, color: 5, nowMs: t0, userId: op, opId: cid1, opTtlMs: 60_000 });
   assert.equal(first.status, "ok");
   assert.equal(first.charges, 4, "arrived full at 5, consumed 1");
   const versionAfterFirst = Number(await redis.get(K.meta));
 
-  const replay = await place({ x: 1, y: 1, color: 5, nowMs: t0, userId: op, opId: "7", opTtlMs: 60_000 });
+  const replay = await place({ x: 1, y: 1, color: 5, nowMs: t0, userId: op, opId: cid1, opTtlMs: 60_000 });
   assert.equal(replay.status, "ok", "replay still acks ok");
   assert.equal(Number(await redis.hget(userGaugeKey(op), "c")), 4, "replay does NOT consume a second charge");
   assert.equal(Number(await redis.get(K.meta)), versionAfterFirst, "replay does NOT advance the version");
 
-  // A DIFFERENT opId from the same user is a fresh placement and does consume.
-  const second = await place({ x: 2, y: 2, color: 5, nowMs: t0, userId: op, opId: "8", opTtlMs: 60_000 });
+  // A DIFFERENT cid from the same user is a fresh placement and does consume.
+  const second = await place({ x: 2, y: 2, color: 5, nowMs: t0, userId: op, opId: cid2, opTtlMs: 60_000 });
   assert.equal(second.status, "ok");
   assert.equal(second.charges, 3, "distinct op consumes another charge");
 });
