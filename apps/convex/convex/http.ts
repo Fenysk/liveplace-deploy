@@ -3,9 +3,9 @@ import { authComponent, createAuth } from "./auth";
 
 /**
  * Better Auth HTTP routes, served by Convex at `${CONVEX_SITE_URL}/api/auth/*`.
- * The web app proxies its catch-all `/api/auth/$` route to these (auth-flow.md).
- * CORS is restricted to the public site origin (SITE_URL) so only our frontend
- * can drive the OAuth/session endpoints.
+ * The Vite SPA talks to these directly — there is no app-tier server or proxy
+ * (see docs/contracts/auth-flow.md). CORS is restricted to the public site
+ * origin (SITE_URL) so only our frontend can drive the OAuth/session endpoints.
  */
 const http = httpRouter();
 
