@@ -93,13 +93,27 @@ function loadDeployEnv() {
 }
 const rel = (p) => p.replace(REPO_ROOT + "/", "");
 
+/** Highest-numbered non-empty COOLIFY_API_TOKEN* env var (COOLIFY_API_TOKEN = 0,
+ *  _2 = 2, _3 = 3, …). Survives token rotation without a code change. */
+function resolveToken(env) {
+  let best = { n: -1, val: "" };
+  for (const [k, v] of Object.entries(env)) {
+    const m = /^COOLIFY_API_TOKEN(?:_(\d+))?$/.exec(k);
+    if (!m || !v) continue;
+    const n = m[1] ? Number(m[1]) : 0;
+    if (n > best.n) best = { n, val: v };
+  }
+  return best.val;
+}
+
 // ── config resolution ─────────────────────────────────────────────────────────
 function cfg() {
   const env = process.env;
   const COOLIFY_URL = (env.COOLIFY_URL || DEFAULT_COOLIFY_URL).replace(/\/$/, "");
-  // Alexis regenerated the token into COOLIFY_API_TOKEN_2 (the original
-  // COOLIFY_API_TOKEN is stale). Accept either; the _2 name wins if both exist.
-  const token = env.COOLIFY_API_TOKEN_2 || env.COOLIFY_API_TOKEN || "";
+  // Alexis rotates the token under a numbered suffix when regenerating it
+  // (COOLIFY_API_TOKEN → _2 → _3 → …); the older names go stale. Pick the
+  // highest-numbered NON-EMPTY COOLIFY_API_TOKEN* so each rotation just works.
+  const token = resolveToken(env);
   const dryRun = ARGS.has("--dry-run") || !token;
 
   let base = env.PUBLIC_BASE_URL ?? "";
