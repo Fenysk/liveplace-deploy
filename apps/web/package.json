@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@canvas/convex": "workspace:*",
     "@canvas/i18n": "workspace:*",
     "@canvas/protocol": "workspace:*",
     "@convex-dev/better-auth": "0.12.2",
