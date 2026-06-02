@@ -33,6 +33,14 @@ export const PLACE_LUA: string = loadScript("place.lua");
 /** Read-only gauge snapshot for display (current/max/countdown). */
 export const REFILL_PEEK_LUA: string = loadScript("refill-peek.lua");
 
+/**
+ * Atomic bulk overwrite + fan-out for the moderation suite (F8.1/F8.2/F8.3:
+ * ban+wipe, delete, restore). Single critical section; rides the same
+ * DELTA_CHANNEL + coalescer as place.lua so a wipe reaches clients as one
+ * bulkDelta. Load once, then EVALSHA.
+ */
+export const MODERATE_LUA: string = loadScript("moderate.lua");
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Key schema. Keep all key construction here so every service agrees.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,11 +68,19 @@ export const CANVAS_WRITE_COUNTER_KEY = "canvas:writes:count";
 /** Pub/sub channel carrying individual pixel writes ("seq,x,y,color") for fan-out. */
 export const DELTA_CHANNEL = "canvas:deltas";
 
+/**
+ * Emergency-freeze flag (F8.4). `"1"` = placement is closed for everyone;
+ * absent/falsey = open. place.lua reads it before touching the gauge so a
+ * moderator's freeze/unfreeze takes effect on the very next placement (CA4).
+ * A single SET/DEL on this key is the whole freeze action.
+ */
+export const CANVAS_FROZEN_KEY = "canvas:frozen";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed wrappers for the script results.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type PlaceStatus = "ok" | "cooldown" | "out_of_bounds" | "invalid_color";
+export type PlaceStatus = "ok" | "cooldown" | "out_of_bounds" | "invalid_color" | "frozen";
 
 export interface PlaceResult {
   status: PlaceStatus;
@@ -112,9 +128,10 @@ export function parsePeekResult(raw: unknown): PeekResult {
 
 /**
  * Build args for place.lua.
- * KEYS = [canvasBitmapKey, userGaugeKey, writeCounterKey]; ARGV as documented
- * in the script. The write counter feeds the monotonic per-write sequence used
- * for reconnect/resync (FEN-13).
+ * KEYS = [canvasBitmapKey, userGaugeKey, writeCounterKey, frozenFlagKey]; ARGV as
+ * documented in the script. The write counter feeds the monotonic per-write
+ * sequence used for reconnect/resync (FEN-13); the frozen flag (F8.4) lets a
+ * moderator close placement for everyone with a single SET.
  */
 export function placeArgs(opts: {
   x: number;
@@ -127,9 +144,9 @@ export function placeArgs(opts: {
   gauge: GaugeParams;
   userId: string;
   deltaChannel?: string;
-}): { keys: [string, string, string]; argv: string[] } {
+}): { keys: [string, string, string, string]; argv: string[] } {
   return {
-    keys: [CANVAS_BITMAP_KEY, userGaugeKey(opts.userId), CANVAS_WRITE_COUNTER_KEY],
+    keys: [CANVAS_BITMAP_KEY, userGaugeKey(opts.userId), CANVAS_WRITE_COUNTER_KEY, CANVAS_FROZEN_KEY],
     argv: [
       String(opts.x),
       String(opts.y),
@@ -165,4 +182,52 @@ export function peekArgs(opts: {
       String(opts.gauge.gaugeMax),
     ],
   };
+}
+
+/** A single cell a moderation action overwrites: position + the colour to write. */
+export interface ModerationCell {
+  x: number;
+  y: number;
+  /** Palette index to write: 0/white to wipe, or the previous colour to restore. */
+  color: number;
+}
+
+export interface ModerateResult {
+  /** Cells actually written. `applied < cells.length` signals a malformed batch. */
+  applied: number;
+  /** Write sequence of the last applied cell (0 if none applied). */
+  lastSeq: number;
+}
+
+/**
+ * Build args for moderate.lua — the atomic bulk overwrite behind ban+wipe,
+ * delete and restore (F8.1–F8.3). KEYS = [canvasBitmapKey, writeCounterKey];
+ * ARGV = [width, height, paletteSize, deltaChannel, count, x,y,color, …]. The
+ * caller (gateway, on a Convex-authorised moderation action) supplies the cells
+ * and the colours to write; the script applies and fans them out atomically.
+ */
+export function moderateArgs(opts: {
+  width: number;
+  height: number;
+  paletteSize: number;
+  cells: ReadonlyArray<ModerationCell>;
+  deltaChannel?: string;
+}): { keys: [string, string]; argv: string[] } {
+  const argv: string[] = [
+    String(opts.width),
+    String(opts.height),
+    String(opts.paletteSize),
+    opts.deltaChannel ?? DELTA_CHANNEL,
+    String(opts.cells.length),
+  ];
+  for (const c of opts.cells) {
+    argv.push(String(c.x), String(c.y), String(c.color));
+  }
+  return { keys: [CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY], argv };
+}
+
+/** Parse the raw [applied, lastSeq] array from moderate.lua. */
+export function parseModerateResult(raw: unknown): ModerateResult {
+  const arr = raw as [number | string, number | string];
+  return { applied: Number(arr[0]), lastSeq: Number(arr[1]) };
 }

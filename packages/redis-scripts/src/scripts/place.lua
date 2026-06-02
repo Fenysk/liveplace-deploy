@@ -22,6 +22,9 @@
 -- KEYS[1] = canvas bitmap key   (string, 1 byte/pixel, row-major)
 -- KEYS[2] = user gauge key       (hash: { c = charges, ts = refill clock ms })
 -- KEYS[3] = write counter key    (monotonic global write sequence; fan-out + resync)
+-- KEYS[4] = frozen flag key       (optional; emergency freeze, F8.4. "1" = placement
+--                                  closed for everyone. Absent/falsey = open. Checked
+--                                  before any gauge work so a freeze is instantaneous.)
 --
 -- ARGV[1]  = x
 -- ARGV[2]  = y
@@ -37,7 +40,7 @@
 -- ARGV[12] = deltaChannel        (pub/sub channel for fan-out; "" disables publish)
 --
 -- Returns: { status, charges, max, cooldownUntil }
---   status        = "ok" | "cooldown" | "out_of_bounds" | "invalid_color"
+--   status        = "ok" | "cooldown" | "out_of_bounds" | "invalid_color" | "frozen"
 --   charges       = charges remaining after the call
 --   max           = effective max in force this call
 --   cooldownUntil = epoch ms the next charge lands (0 = gauge full). On a
@@ -55,6 +58,14 @@ local amount     = tonumber(ARGV[9])
 local max        = tonumber(ARGV[10])
 local gaugeTtl   = tonumber(ARGV[11])
 local deltaChan  = ARGV[12]
+
+-- Emergency freeze (F8.4): a moderator can close the canvas for everyone in one
+-- write (SET frozen flag). Checked before bounds/gauge so it takes effect on the
+-- very next placement — no charge is touched, no fan-out is emitted. KEYS[4] is
+-- optional so unit harnesses that pass only bitmap+gauge[+counter] keep working.
+if KEYS[4] and redis.call("GET", KEYS[4]) == "1" then
+  return { "frozen", 0, max, 0 }
+end
 
 -- Defensive validation (the gateway also validates before calling).
 if x < 0 or y < 0 or x >= width or y >= height then
