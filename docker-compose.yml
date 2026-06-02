@@ -1,0 +1,144 @@
+# Twitch Canvas — full stack for NAS deploy. `docker compose up` (no params)
+# brings up Redis, self-hosted Convex, the WS gateway, the persistence worker,
+# the static web SPA, and a Caddy TLS reverse proxy. Multi-arch (arm64 NAS +
+# amd64). Config/secrets come from .env (copy .env.example -> .env). Secrets are
+# never baked into images.
+#
+# Boot order (FEN-69): redis + convex-backend go healthy, then `convex-deploy`
+# pushes the Convex functions once and exits; gateway/worker only start after
+# that completes so they connect to a deployed backend.
+services:
+  redis:
+    image: redis:7-alpine
+    # AOF persistence on a durable volume (R2: survive restart, keep stream backlog).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    env_file: [.env]
+    environment:
+      - INSTANCE_NAME=twitch-canvas
+      - INSTANCE_SECRET=${CONVEX_INSTANCE_SECRET}
+      # Public origins the browser reaches through the proxy (see infra/Caddyfile).
+      - CONVEX_CLOUD_ORIGIN=${VITE_CONVEX_URL}
+      - CONVEX_SITE_ORIGIN=${VITE_CONVEX_SITE_URL}
+    volumes:
+      - convex-data:/convex/data
+    healthcheck:
+      # The convex-backend image ships curl (matches upstream self-hosting compose);
+      # it has no busybox/wget, so wget here would never go healthy.
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # One-shot: deploy the Convex functions into the self-hosted backend, then exit.
+  # Everything that talks to Convex depends on this completing successfully.
+  convex-deploy:
+    build:
+      context: .
+      dockerfile: apps/convex/Dockerfile
+    env_file: [.env]
+    environment:
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    env_file: [.env]
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      convex-backend:
+        condition: service_healthy
+      convex-deploy:
+        condition: service_completed_successfully
+    healthcheck:
+      # node:22-alpine ships busybox wget. The gateway answers 200 on any GET.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # Persistence worker (FEN-57): batch-flushes the Redis placement stream to
+  # Convex (worker:* seam), writes snapshots + gallery fields, rebuilds Redis on
+  # cold start. NOT on the hot path (G-A1); exposes no ports.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: [.env]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+      # ADR-0001: the worker's canvas slug MUST equal the gateway's. Both read the
+      # single GATEWAY_CANVAS_ID from the shared .env, so they match by construction.
+    depends_on:
+      redis:
+        condition: service_healthy
+      convex-backend:
+        condition: service_healthy
+      convex-deploy:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      # VITE_* are inlined at build time (public origins, not secrets).
+      args:
+        VITE_CONVEX_URL: ${VITE_CONVEX_URL}
+        VITE_CONVEX_SITE_URL: ${VITE_CONVEX_SITE_URL}
+    healthcheck:
+      # node:22-alpine static server answers 200 on /healthz.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # TLS reverse proxy. Routes /ws -> gateway, /api/auth -> convex site origin
+  # (Twitch callback), /convex -> convex cloud origin, everything else -> web.
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      - SITE_HOST=${SITE_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - gateway
+      - convex-backend
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  convex-data:
+  caddy-data:
+  caddy-config:

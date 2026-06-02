@@ -1,0 +1,35 @@
+# @canvas/convex — one-shot deploy image. Build context = repo root. Multi-arch.
+#
+# This image is NOT a long-running service. The compose `convex-deploy` service
+# runs it once after convex-backend is healthy to push the canvas functions
+# (`canvases:*`, `worker:*`, `gallery:*`, auth HTTP routes, …) into the
+# self-hosted backend, then exits. The gateway/worker/web depend on it having
+# completed so they connect to a deployed backend (boot-sequence wiring, FEN-69).
+#
+# Self-hosted deploy reads CONVEX_SELF_HOSTED_URL + CONVEX_SELF_HOSTED_ADMIN_KEY
+# from the environment (provided via .env / Docker secrets — never baked in).
+#
+# NOTE (upstream dependency): `convex deploy` currently fails on a
+# better-auth/kysely export mismatch (apps/convex / Full-stack concern). Until
+# that resolves this one-shot will error and hold the dependent services back.
+FROM node:22-alpine AS base
+RUN corepack enable
+WORKDIR /app
+
+FROM base AS deps
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
+COPY apps/gateway/package.json apps/gateway/
+COPY apps/web/package.json apps/web/
+COPY apps/worker/package.json apps/worker/
+COPY apps/convex/package.json apps/convex/
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/redis-scripts/package.json packages/redis-scripts/
+COPY packages/i18n/package.json packages/i18n/
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS runtime
+COPY packages ./packages
+COPY apps/convex ./apps/convex
+WORKDIR /app/apps/convex
+# `convex deploy` against the self-hosted backend (URL + admin key from env).
+CMD ["pnpm", "exec", "convex", "deploy", "-y"]

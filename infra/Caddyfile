@@ -1,0 +1,41 @@
+# Twitch Canvas reverse proxy + automatic TLS (D4/D5, owned by DevOps).
+#
+# Set SITE_HOST in .env to your NAS hostname. Caddy provisions TLS automatically
+# (Let's Encrypt for a public name). For a LAN-only NAS with no public DNS,
+# uncomment `tls internal` to use Caddy's self-signed CA instead.
+#
+# Routing model (canonical _default — web is a pure SPA, auth lives in Convex):
+#   /ws*        -> gateway   (WebSocket, ADR-0003)
+#   /api/auth*  -> convex SITE origin (:3211)  — Better Auth + the Twitch OAuth
+#                  callback (${PUBLIC_SITE_URL}/api/auth/callback/twitch). This
+#                  is the D5 deliverable: the callback reachable over HTTPS.
+#   /convex*    -> convex CLOUD origin (:3210) — the Convex client API/sync.
+#   everything  -> web       (static SPA assets)
+#
+# The convex backend serves both origins at their own roots, so we strip the
+# public path prefixes with `handle_path` before proxying upstream.
+{$SITE_HOST:localhost} {
+	# tls internal   # uncomment for a LAN-only NAS (self-signed CA)
+
+	encode gzip zstd
+
+	# WebSocket gateway (separate service, ADR-0003).
+	@ws path /ws /ws/*
+	reverse_proxy @ws gateway:8080
+
+	# Better Auth HTTP routes incl. the Twitch OAuth callback (Convex site origin).
+	# Kept at the site root (/api/auth*) — Better Auth registers its routes there,
+	# so no prefix is stripped.
+	handle /api/auth* {
+		reverse_proxy convex-backend:3211
+	}
+
+	# Convex client API/sync. VITE_CONVEX_URL = https://<host>/convex; strip the
+	# /convex prefix so the backend (which serves at root) sees the bare path.
+	handle_path /convex/* {
+		reverse_proxy convex-backend:3210
+	}
+
+	# Static SPA (canvas, gallery, profile, OBS view, …).
+	reverse_proxy web:3000
+}

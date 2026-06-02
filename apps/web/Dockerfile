@@ -1,0 +1,51 @@
+# @canvas/web — Vite SPA image. Build context = repo root. Multi-arch.
+#
+# Canonical web is a PURE client SPA: `build` == `tsc --noEmit && vite build`,
+# producing static assets in apps/web/dist. There is no app-tier server (auth is
+# served by Convex). So we build the assets in one stage and serve them with a
+# tiny stdlib static server (infra/web-serve.mjs) in the runtime stage.
+#
+# VITE_* are inlined at BUILD time, so the public Convex URLs must be passed as
+# build args (they are public origins, not secrets).
+#
+# NOTE (upstream dependency): `tsc`/`vite build` and the `convex codegen` step
+# below require apps/convex to be codegen-clean. Today `convex codegen` fails on
+# a better-auth/kysely export mismatch (a Full-stack / apps/convex concern, not
+# infra). Until that resolves, this image build is blocked — tracked for FEN-58.
+FROM node:22-alpine AS base
+RUN corepack enable
+WORKDIR /app
+
+FROM base AS build
+ARG VITE_CONVEX_URL
+ARG VITE_CONVEX_SITE_URL
+ENV VITE_CONVEX_URL=${VITE_CONVEX_URL}
+ENV VITE_CONVEX_SITE_URL=${VITE_CONVEX_SITE_URL}
+# Manifests first for a cacheable install layer.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
+COPY apps/gateway/package.json apps/gateway/
+COPY apps/web/package.json apps/web/
+COPY apps/worker/package.json apps/worker/
+COPY apps/convex/package.json apps/convex/
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/redis-scripts/package.json packages/redis-scripts/
+COPY packages/i18n/package.json packages/i18n/
+RUN pnpm install --frozen-lockfile
+# Sources: web + the workspace packages it imports, plus apps/convex so the
+# generated `@canvas/convex/api` (imported by ProfilePage) is available.
+COPY packages ./packages
+COPY apps/convex ./apps/convex
+COPY apps/web ./apps/web
+# Generate @canvas/convex/_generated (api/dataModel/server) for the web typecheck
+# + build. Local, no deployment needed.
+RUN pnpm --filter @canvas/convex codegen
+RUN pnpm --filter @canvas/web build
+
+FROM node:22-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY infra/web-serve.mjs ./web-serve.mjs
+COPY --from=build /app/apps/web/dist ./public
+EXPOSE 3000
+# busybox wget (alpine) backs the compose healthcheck against /healthz.
+CMD ["node", "web-serve.mjs"]
