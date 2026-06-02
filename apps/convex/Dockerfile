@@ -31,5 +31,7 @@ FROM deps AS runtime
 COPY packages ./packages
 COPY apps/convex ./apps/convex
 WORKDIR /app/apps/convex
-# `convex deploy` against the self-hosted backend (URL + admin key from env).
-CMD ["pnpm", "exec", "convex", "deploy", "-y"]
+# Deploy the functions, then seed the deployment env vars they read via
+# process.env (self-hosted Convex keeps those IN the deployment, not the
+# container env — see deploy.sh). URL + admin key come from env / Docker secrets.
+CMD ["sh", "./deploy.sh"]

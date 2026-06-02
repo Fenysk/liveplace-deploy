@@ -42,8 +42,11 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # One-shot: deploy the Convex functions into the self-hosted backend, then exit.
-  # Everything that talks to Convex depends on this completing successfully.
+  # One-shot: deploy the Convex functions into the self-hosted backend, then seed
+  # the deployment env vars they read (incl. the F8 GATEWAY_INTERNAL_* seam — see
+  # apps/convex/deploy.sh), then exit. Self-hosted Convex keeps function env IN
+  # the deployment, so env_file alone never reaches process.env; deploy.sh pushes
+  # it. Everything that talks to Convex depends on this completing successfully.
   convex-deploy:
     build:
       context: .
@@ -63,6 +66,11 @@ services:
     env_file: [.env]
     environment:
       - REDIS_URL=redis://redis:6379
+      # F8 moderation internal seam (FEN-19): authorises Convex's POST
+      # /internal/{moderate,ban,freeze,flush} calls. Unset => the seam is disabled
+      # (routes answer 404); wrong/missing Bearer => 401. Also flows via env_file;
+      # kept explicit so the security-sensitive wiring is auditable here.
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
     depends_on:
       redis:
         condition: service_healthy
