@@ -1,8 +1,8 @@
 /**
- * Optimistic placement controller — the client half of F4 ([FEN-60], from
- * [FEN-14]). It paints a pose/erase onto the local canvas immediately, then
- * reconciles against the gateway's verdict: keep the pixel on `ack`, roll it
- * back on a refusal (`cooldown` / `error`).
+ * Optimistic placement controller — the client half of F4 ([FEN-60], migrated to
+ * the ratified `cid` op id in [FEN-70]). It paints a pose/erase onto the local
+ * canvas immediately, then reconciles against the gateway's verdict: keep the
+ * pixel on `ack`, roll it back on a refusal (`cooldown` / `error`).
  *
  * Why a standalone controller (no React, no canvas backing store): the F4
  * optimism/rollback state machine is the genuine content of this issue and is
@@ -10,17 +10,27 @@
  * `@canvas/protocol` wire types and drives a tiny {@link PlacementSurface} sink,
  * so the eventual canvas component (F3) plugs in by implementing two methods.
  *
- * Server contract it mirrors (gateway `apps/gateway/src/placement.ts`, 981ca29):
- *   - success  → `ack  { seq, charges, max, cooldownUntil }`  — seq echoes place.seq
- *   - cooldown → `cooldown { until }`                          — NO seq (gauge empty)
- *   - refusal  → `error { code, message, seq }`                — seq echoes place.seq
+ * Server contract it mirrors (gateway `apps/gateway/src/placement.ts`, ccb6776):
+ *   - success  → `ack  { cid, charges, max, cooldownUntil }`   — cid echoes place.cid
+ *   - cooldown → `cooldown { until }`                          — NO cid (gauge empty)
+ *   - refusal  → `error { code, message, cid }`                — cid echoes place.cid
  *
- * Idempotency (CA5): every op is tagged with a positive, monotonic, STABLE seq.
- * On reconnect the still-un-acked ops are re-sent with the SAME seq via
- * {@link OptimisticPlacement.resendQueue}; the gateway dedups on seq, so a
- * resend places exactly once.
+ * Op id (`cid`, ratified FEN-63, contract `1aa494a` §cid): every placement is
+ * tagged with an OPAQUE, client-generated, per-op string (a UUID by default —
+ * see {@link defaultCidGen}). It does two jobs:
+ *   1. Optimistic reconciliation: the client keys its pending pixel by `cid` and
+ *      matches the echoed `cid` on `ack` (commit) / `error` (rollback). The
+ *      global `seq` cannot do this — the client never learns an op's `seq` until
+ *      its `ack`, so it has nothing to key the pending placement on in advance.
+ *   2. CA5 idempotency: the gateway claims a per-`(canvas,user,cid)` key with
+ *      `SET NX`, so an un-acked op re-sent after a reconnect (via
+ *      {@link OptimisticPlacement.resendQueue}, with the SAME `cid`) places
+ *      exactly once. The id MUST be opaque and stable per op — a per-session
+ *      integer counter that resets to `1` on restart can collide with a prior
+ *      op from the same user and get a legit placement dropped as a false replay,
+ *      which is why the default is a UUID rather than a counter.
  *
- * Cooldown correlation: a `cooldown` frame has no seq, so it cannot be matched
+ * Cooldown correlation: a `cooldown` frame has no cid, so it cannot be matched
  * by id. The gateway processes places sequentially and the socket delivers
  * replies in order over TCP, so a refusal always concerns the OLDEST un-acked
  * op — we roll back the head of the (insertion-ordered) pending map.
@@ -35,6 +45,21 @@ import {
 
 /** A client→server `place` message (also used for erase, color 0). */
 export type PlaceMessage = Extract<ClientMessage, { t: "place" }>;
+
+/**
+ * Default `cid` generator: an opaque, collision-free UUID per op. Uses the WHATWG
+ * `crypto.randomUUID()` available in modern browsers and Node ≥ 19 (the web/OBS
+ * runtimes). Falls back to a timestamp+random token only if `randomUUID` is
+ * unavailable — still opaque and non-resetting, the property the contract requires.
+ */
+export function defaultCidGen(): string {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  // Fallback: two random 32-bit hex words. Not a UUID, but opaque, per-op unique,
+  // and never reset to a fixed seed across restarts (no false-replay risk).
+  const rand = () => Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, "0");
+  return `cid-${rand()}${rand()}`;
+}
 
 /**
  * The display sink the controller paints through. The future canvas component
@@ -82,6 +107,12 @@ export interface PlacementOptions {
   /** Injectable clock for deterministic tests; defaults to Date.now. */
   now?: () => number;
   /**
+   * Injectable opaque `cid` generator for deterministic tests; defaults to
+   * {@link defaultCidGen} (a UUID per op). MUST return a fresh, stable-per-op,
+   * non-resetting token (see the CA5 note in the file header).
+   */
+  genCid?: () => string;
+  /**
    * When the last-known gauge is empty, refuse the optimistic placement locally
    * (immediate cooldown feedback, no wasted round-trip). Default true. The gauge
    * is still authoritative server-side; this only avoids obviously-doomed sends.
@@ -90,7 +121,7 @@ export interface PlacementOptions {
 }
 
 interface PendingPlacement {
-  seq: number;
+  cid: string;
   x: number;
   y: number;
   color: number;
@@ -118,14 +149,13 @@ export class OptimisticPlacement {
   private readonly height: number;
   private readonly paletteSize: number;
   private readonly now: () => number;
+  private readonly genCid: () => string;
   private readonly blockWhenEmpty: boolean;
   private readonly onGaugeCb?: (gauge: GaugeState) => void;
   private readonly onFeedbackCb?: (feedback: PlacementFeedback) => void;
 
-  /** Monotonic op counter — first op is seq 1 (positive & stable per op, CA5). */
-  private seqCounter = 0;
-  /** Un-acked optimistic placements, keyed by seq, in insertion (FIFO) order. */
-  private readonly pending = new Map<number, PendingPlacement>();
+  /** Un-acked optimistic placements, keyed by opaque `cid`, in insertion (FIFO) order. */
+  private readonly pending = new Map<string, PendingPlacement>();
   /** Last gauge the server reported, for local empty-checks and the UI. */
   private gauge: GaugeState | null = null;
 
@@ -135,6 +165,7 @@ export class OptimisticPlacement {
     this.height = opts.height;
     this.paletteSize = opts.paletteSize;
     this.now = opts.now ?? Date.now;
+    this.genCid = opts.genCid ?? defaultCidGen;
     this.blockWhenEmpty = opts.blockWhenEmpty ?? true;
     this.onGaugeCb = opts.onGauge;
     this.onFeedbackCb = opts.onFeedback;
@@ -153,7 +184,7 @@ export class OptimisticPlacement {
   /**
    * Optimistically place a pixel (or erase it — pass `EMPTY_COLOR`). Validates
    * locally first so an out-of-bounds / bad-colour / known-empty-gauge op never
-   * paints or burns a seq. On success it paints immediately and returns the
+   * paints or mints a cid. On success it paints immediately and returns the
    * `place` message the caller must send; returns null when rejected locally
    * (feedback already emitted).
    */
@@ -177,11 +208,11 @@ export class OptimisticPlacement {
       return null;
     }
 
-    const seq = ++this.seqCounter;
+    const cid = this.genCid();
     const prevColor = this.surface.getPixel(x, y);
     this.surface.setPixel(x, y, color); // optimistic paint
-    this.pending.set(seq, { seq, x, y, color, prevColor });
-    return { t: "place", x, y, color, seq };
+    this.pending.set(cid, { cid, x, y, color, prevColor });
+    return { t: "place", x, y, color, cid };
   }
 
   /** Route a server frame to the matching handler. Non-placement frames are ignored. */
@@ -208,21 +239,24 @@ export class OptimisticPlacement {
   private onAck(msg: Extract<ServerMessage, { t: "ack" }>): void {
     // Confirmed: drop the pending entry but KEEP the painted pixel — it is now
     // authoritative until the broadcast delta echoing it lands (idempotent LWW).
-    this.pending.delete(msg.seq);
+    // The gateway echoes the op's `cid`; fall back to FIFO (oldest un-acked) only
+    // if a frame ever arrives without one (TCP order makes that the right op).
+    if (typeof msg.cid === "string") this.pending.delete(msg.cid);
+    else this.dropOldest();
     this.applyGauge(msg);
   }
 
   private onError(msg: Extract<ServerMessage, { t: "error" }>): void {
-    // Every gateway error carries the echoed seq; fall back to FIFO if a future
-    // error variant omits it.
-    if (typeof msg.seq === "number") this.rollback(msg.seq);
+    // Every placement error echoes the op's `cid`; fall back to FIFO if an error
+    // variant ever omits it (e.g. one not tied to a specific `place`).
+    if (typeof msg.cid === "string") this.rollback(msg.cid);
     else this.rollbackOldest();
     const f = ERROR_FEEDBACK[msg.code] ?? ERROR_FEEDBACK.internal;
     this.emitFeedback({ kind: f.kind, messageKey: f.messageKey, code: msg.code });
   }
 
   private onCooldown(until: number): void {
-    // No seq on a cooldown frame → roll back the oldest un-acked op (TCP order).
+    // No cid on a cooldown frame → roll back the oldest un-acked op (TCP order).
     this.rollbackOldest();
     // Reflect "empty, next charge at `until`" so the gauge/countdown updates even
     // though the cooldown frame omits charges/max.
@@ -240,10 +274,10 @@ export class OptimisticPlacement {
     });
   }
 
-  private rollback(seq: number): void {
-    const p = this.pending.get(seq);
+  private rollback(cid: string): void {
+    const p = this.pending.get(cid);
     if (!p) return;
-    this.pending.delete(seq);
+    this.pending.delete(cid);
     this.surface.setPixel(p.x, p.y, p.prevColor); // revert the optimistic paint
   }
 
@@ -253,12 +287,19 @@ export class OptimisticPlacement {
     this.rollback(first.value);
   }
 
+  /** Commit (drop, keep painted) the oldest un-acked op — the cid-less ack fallback. */
+  private dropOldest(): void {
+    const first = this.pending.keys().next();
+    if (!first.done) this.pending.delete(first.value);
+  }
+
   /**
-   * The un-acked placements as `place` messages carrying their ORIGINAL seq, to
-   * re-send after a reconnect (CA5 idempotency). Oldest-first.
+   * The un-acked placements as `place` messages carrying their ORIGINAL cid, to
+   * re-send after a reconnect (CA5 idempotency: SET NX on (canvas,user,cid) makes
+   * the resend place exactly once). Oldest-first.
    */
   resendQueue(): PlaceMessage[] {
-    return [...this.pending.values()].map((p) => ({ t: "place", x: p.x, y: p.y, color: p.color, seq: p.seq }));
+    return [...this.pending.values()].map((p) => ({ t: "place", x: p.x, y: p.y, color: p.color, cid: p.cid }));
   }
 
   /**
