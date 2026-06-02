@@ -50,22 +50,31 @@ test("moderateArgs lays out KEYS + ARGV in the order moderate.lua expects", () =
     canvasId: CID,
     cells,
     deltaChannel: DELTA_CHANNEL,
+    actorUserId: "mod-1",
+    nowMs: 1_700_000_000_000,
   });
 
-  assert.deepEqual(keys, [K.pixels, K.meta]);
-  // [width, height, paletteSize, deltaChannel, count, then x,y,color * N]
+  // KEYS = [pixels, meta, stream] — the durable stream is the F8 binding invariant.
+  assert.deepEqual(keys, [K.pixels, K.meta, K.stream]);
+  // [width, height, paletteSize, deltaChannel, userId, ts, count, then x,y,color * N]
   assert.deepEqual(argv, [
-    "512", "512", "32", DELTA_CHANNEL, "2",
+    "512", "512", "32", DELTA_CHANNEL, "mod-1", "1700000000000", "2",
     "1", "2", "0",
     "3", "4", "7",
   ]);
 });
 
-test("moderateArgs defaults the channel and handles an empty batch", () => {
-  const { argv } = moderateArgs({ width: 16, height: 16, paletteSize: 32, canvasId: CID, cells: [] });
+test("moderateArgs defaults actor/channel and can skip the durable stream", () => {
+  const { keys, argv } = moderateArgs({
+    width: 16, height: 16, paletteSize: 32, canvasId: CID, cells: [], nowMs: 5,
+    streamKey: false,
+  });
   assert.equal(argv[3], DELTA_CHANNEL); // default channel
-  assert.equal(argv[4], "0"); // count
-  assert.equal(argv.length, 5); // no trailing triples
+  assert.equal(argv[4], ""); // default actor = system/moderation overwrite
+  assert.equal(argv[5], "5"); // ts
+  assert.equal(argv[6], "0"); // count
+  assert.equal(argv.length, 7); // no trailing triples
+  assert.equal(keys[2], ""); // stream slot omitted → no XADD
 });
 
 test("parseModerateResult reads [applied, lastSeq]", () => {

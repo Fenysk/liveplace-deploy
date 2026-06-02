@@ -14,7 +14,7 @@ const REDIS_URL = process.env.REDIS_URL;
 
 test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }, async (t) => {
   const {
-    MODERATE_LUA, moderateArgs, parseModerateResult,
+    MODERATE_LUA, moderateArgs, parseModerateResult, parseStreamRecord,
     canvasKeys, DELTA_CHANNEL,
   } = await import("../src/index.ts");
   const { default: Redis } = await import("ioredis");
@@ -24,7 +24,7 @@ test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }
   const W = 16, H = 16;
   const canvasId = `mod-${process.pid}`;
   const K = canvasKeys(canvasId);
-  const keysToClear = [K.pixels, K.meta];
+  const keysToClear = [K.pixels, K.meta, K.stream];
 
   t.after(async () => {
     await redis.del(...keysToClear);
@@ -47,7 +47,10 @@ test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }
     { x: 1, y: 2, color: 0 },
     { x: 3, y: 4, color: 0 },
   ];
-  const { keys, argv } = moderateArgs({ width: W, height: H, paletteSize: 32, canvasId, cells, deltaChannel: DELTA_CHANNEL });
+  const { keys, argv } = moderateArgs({
+    width: W, height: H, paletteSize: 32, canvasId, cells, deltaChannel: DELTA_CHANNEL,
+    actorUserId: "", nowMs: 1_700_000_000_000,
+  });
   const res = parseModerateResult(await redis.eval(MODERATE_LUA, keys.length, ...keys, ...argv));
 
   assert.equal(res.applied, 2);
@@ -62,6 +65,18 @@ test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }
   assert.equal(counter, 2);
   assert.equal(res.lastSeq, 2);
 
+  // DURABILITY (binding invariant): each overwritten cell was XADDed to the
+  // per-canvas stream with the bumped version + the same shape place.lua uses,
+  // so the worker drains a moderation wipe into `placements` like any placement.
+  const entries = (await redis.xrange(K.stream, "-", "+")) as [string, string[]][];
+  assert.equal(entries.length, 2);
+  const rec0 = parseStreamRecord(entries[0]![1]);
+  assert.deepEqual(
+    { x: rec0.x, y: rec0.y, color: rec0.color, version: rec0.version, ts: rec0.ts },
+    { x: 1, y: 2, color: 0, version: 1, ts: 1_700_000_000_000 },
+  );
+  assert.equal(rec0.userId, ""); // system / moderation overwrite
+
   // Both writes were published on DELTA_CHANNEL as "seq,x,y,color" → the gateway
   // coalesces them into a single bulkDelta frame (CA1).
   await new Promise((r) => setTimeout(r, 50));
@@ -71,9 +86,12 @@ test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }
 
   // Restore (F8.3) is the same engine with the previous colours: put cell (1,2)
   // back to 5. applied counts it; the wipe of an out-of-bounds cell is skipped.
+  // streamKey:false → this restore is realtime-only (no durable record) to prove
+  // the toggle; production restores keep the stream on.
   const restore = moderateArgs({
     width: W, height: H, paletteSize: 32, canvasId, deltaChannel: "",
     cells: [{ x: 1, y: 2, color: 5 }, { x: 999, y: 999, color: 1 }],
+    actorUserId: "", nowMs: 1_700_000_000_001, streamKey: false,
   });
   const r2 = parseModerateResult(await redis.eval(MODERATE_LUA, restore.keys.length, ...restore.keys, ...restore.argv));
   assert.equal(r2.applied, 1); // out-of-bounds cell skipped

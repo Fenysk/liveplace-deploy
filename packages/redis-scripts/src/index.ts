@@ -344,15 +344,21 @@ export interface ModerateResult {
 
 /**
  * Build args for moderate.lua — the atomic bulk overwrite behind ban+wipe,
- * delete and restore (F8.1–F8.3). KEYS = [pixels, meta]; ARGV = [width, height,
- * paletteSize, deltaChannel, count, x,y,color, …]. The caller (gateway, on a
- * Convex-authorised moderation action) supplies the cells and the colours to
- * write; the script applies them to the same per-canvas bitmap/version as
- * place.lua and fans them out atomically on the shared DELTA_CHANNEL.
+ * delete and restore (F8.1–F8.3). KEYS = [pixels, meta, stream]; ARGV = [width,
+ * height, paletteSize, deltaChannel, userId, ts, count, x,y,color, …]. The caller
+ * (gateway, on a Convex-authorised moderation action) supplies the cells and the
+ * colours to write; the script applies them to the same per-canvas bitmap/version
+ * as place.lua, XADDs each to the durable `stream` and fans them out atomically on
+ * the shared DELTA_CHANNEL.
  *
- * NOTE (FEN-54): moderation overwrites do NOT yet XADD to the durable `stream`,
- * so the worker would not replay a wipe applied between snapshots. Tracked as a
- * follow-up (see ADR-0003); the placement hot path is what FEN-54 makes durable.
+ * Durability (binding invariant, docs/contracts/moderation-internal.md): every
+ * overwritten cell is XADDed to the per-canvas `stream` with the same
+ * {x,y,color,version,userId,ts} shape place.lua uses, so the persistence worker
+ * drains moderation overwrites into `placements` just like placements — keeping
+ * resync and "what was underneath" consistent. `actorUserId` stamps the stream
+ * record; it defaults to "" (system / moderation overwrite — the moderation HTTP
+ * seam carries no per-moderator id, and the real actor is in the Convex auditLog).
+ * Pass `streamKey: false` to skip the durable write (unit harnesses).
  */
 export function moderateArgs(opts: {
   width: number;
@@ -361,19 +367,26 @@ export function moderateArgs(opts: {
   canvasId?: string;
   cells: ReadonlyArray<ModerationCell>;
   deltaChannel?: string;
-}): { keys: [string, string]; argv: string[] } {
+  actorUserId?: string;
+  nowMs: number;
+  /** Set false to omit the durable stream KEYS slot (no XADD). Defaults to true. */
+  streamKey?: boolean;
+}): { keys: [string, string, string]; argv: string[] } {
   const k = canvasKeys(opts.canvasId ?? DEFAULT_CANVAS_ID);
   const argv: string[] = [
     String(opts.width),
     String(opts.height),
     String(opts.paletteSize),
     opts.deltaChannel ?? DELTA_CHANNEL,
+    opts.actorUserId ?? "",
+    String(opts.nowMs),
     String(opts.cells.length),
   ];
   for (const c of opts.cells) {
     argv.push(String(c.x), String(c.y), String(c.color));
   }
-  return { keys: [k.pixels, k.meta], argv };
+  const stream = opts.streamKey === false ? "" : k.stream;
+  return { keys: [k.pixels, k.meta, stream], argv };
 }
 
 /** Parse the raw [applied, lastSeq] array from moderate.lua. */
