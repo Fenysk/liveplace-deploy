@@ -31,6 +31,10 @@ export const fr: Catalog = {
   "canvas.place": "Poser un pixel",
   "canvas.erase": "Gommer",
   "canvas.gauge": "{current}/{max} pixels",
+  "canvas.palette": "Palette de couleurs",
+  "canvas.viewers": "{count} en train de regarder",
+  "canvas.connecting": "Connexion…",
+  "canvas.offline": "Reconnexion…",
 
   // Retour de pose sur la toile (F4) — pose/gomme optimiste + rollback (FEN-60)
   "canvas.feedback.cooldown": "En attente — prochain pixel dans {seconds}s",

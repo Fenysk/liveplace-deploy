@@ -35,6 +35,10 @@ export const en = {
   "canvas.place": "Place pixel",
   "canvas.erase": "Erase",
   "canvas.gauge": "{current}/{max} pixels",
+  "canvas.palette": "Colour palette",
+  "canvas.viewers": "{count} watching",
+  "canvas.connecting": "Connecting…",
+  "canvas.offline": "Reconnecting…",
 
   // Canvas placement feedback (F4) — optimistic pose/erase rollback (FEN-60)
   "canvas.feedback.cooldown": "On cooldown — next pixel in {seconds}s",

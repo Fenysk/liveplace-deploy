@@ -30,12 +30,19 @@ import {
 } from "react";
 import { useTranslate } from "@canvas/i18n/react";
 import { App } from "./App.js";
+import { isObsPath } from "./features/canvas/obs.js";
 
 const ProfilePage = lazy(() =>
   import("./features/profile/ProfilePage.js").then((m) => ({ default: m.ProfilePage })),
 );
 const GalleryPage = lazy(() =>
   import("./features/gallery/GalleryPage.js").then((m) => ({ default: m.GalleryPage })),
+);
+const CanvasView = lazy(() =>
+  import("./features/canvas/CanvasView.js").then((m) => ({ default: m.CanvasView })),
+);
+const ObsView = lazy(() =>
+  import("./features/canvas/ObsView.js").then((m) => ({ default: m.ObsView })),
 );
 
 /** Subscribe to browser history changes (back/forward + `navigate()`). */
@@ -122,6 +129,34 @@ function RouteFallback(): ReactElement {
 
 export function Router(): ReactElement {
   const path = usePathname();
+
+  // OBS browser source: `/obs` or `/{slug}/obs` (read-only, transparent). The
+  // slug (possibly nested) is parsed from the URL inside ObsView.
+  if (isObsPath(path)) {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <ObsView />
+      </Suspense>
+    );
+  }
+
+  // The live canvas is the landing experience: `/` (default canvas) and
+  // `/c/:slug` (a named canvas).
+  if (path === "/" || path === "/canvas") {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <CanvasView />
+      </Suspense>
+    );
+  }
+  const canvasSlug = matchRoute("/c/:slug", path);
+  if (canvasSlug) {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <CanvasView slug={decodeURIComponent(canvasSlug.slug!)} />
+      </Suspense>
+    );
+  }
 
   const profile = matchRoute("/u/:login", path);
   if (profile) {

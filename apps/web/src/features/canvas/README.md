@@ -1,5 +1,24 @@
 # Canvas placement — F4 client (FEN-60, cid migration FEN-70)
 
+> **FEN-65 — now wired into a live canvas client.** The controller below is no
+> longer standalone: it is driven by the canonical F3 client in this folder.
+> - `renderer.ts` — Canvas 2D renderer (zoom/pan, binary snapshot/delta) that
+>   IS the `PlacementSurface` (`getPixel`/`setPixel`).
+> - `net.ts` — `CanvasNetClient` over the frozen `@canvas/protocol` (welcome,
+>   snapshot/delta, ack/error/cooldown/gauge, resync, reconnect resend).
+> - `CanvasView.tsx` — React wiring: palette + gauge/cooldown HUD (D1) + i18n
+>   toasts; mounted at `/` and `/c/:slug` (see `router.tsx`).
+> - `ObsView.tsx` — read-only OBS browser source (`/obs`, `/{slug}/obs`).
+> - `view.ts` / `obs.ts` — DOM-free zoom/pan math + OBS URL config (unit-tested).
+> - `bufferSurface.ts` — headless `PlacementSurface` over a `Uint8Array`, used by
+>   `surface.test.ts` and the visual-capture harness.
+>
+> **Visual verification** (no browser in CI): `scripts/visual-capture.ts` drives
+> the real controller over the real buffer + palette and renders the
+> pose→ack→rollback flow to `apps/web/artifacts/*.png`
+> (`node --experimental-transform-types scripts/visual-capture.ts`). Unit/integration
+> tests: `pnpm --filter @canvas/web test`.
+
 Client half of F4: optimistic pose/erase with rollback on the gateway's verdict.
 The server half is FEN-14 (gateway `apps/gateway/src/placement.ts`); the op id was
 ratified as the opaque `cid` (not `seq`) in FEN-63 (gateway commit `ccb6776`,
