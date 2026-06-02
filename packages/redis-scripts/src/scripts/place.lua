@@ -1,0 +1,120 @@
+-- place.lua — atomic pixel placement with the D1 charge gauge (token bucket).
+--
+-- The entire hot-path write, executed atomically by Redis (single threaded).
+-- It is the mitigation for R1 (concurrency / cooldown bypass): the
+-- refill → check → write → consume sequence cannot interleave with another
+-- client's, so charges can never be raced below 0 or above the max.
+--
+-- Gauge mechanics are decision D1 (Product Owner). The numeric defaults
+-- (gaugeMaxBase=20, refillAmount=1, refillIntervalSec=30) are canvas config,
+-- passed in by the gateway — never hard-coded here. This script MIRRORS the
+-- reference implementation in ../gauge.ts (refillGauge); keep them in sync.
+--
+-- The "gauge" (jauge) is a charge bucket: a viewer holds up to `gaugeMax` and
+-- regenerates `refillAmount` every `refillIntervalMs`. A placement — coloured OR
+-- eraser (color 0) — consumes 1.
+--
+-- `gaugeMax` is the *effective* max (canvas base + the user's upgrade bonus,
+-- F6). The gateway resolves the bonus from Convex per session and passes the
+-- sum here; raising it lifts the ceiling immediately (D1 CA3). The gauge hash is
+-- just { c, ts } — the bonus lives in Convex, never in Redis (F6 contract).
+--
+-- KEYS[1] = canvas bitmap key   (string, 1 byte/pixel, row-major)
+-- KEYS[2] = user gauge key       (hash: { c = charges, ts = refill clock ms })
+-- KEYS[3] = write counter key    (monotonic global write sequence; fan-out + resync)
+--
+-- ARGV[1]  = x
+-- ARGV[2]  = y
+-- ARGV[3]  = width
+-- ARGV[4]  = height
+-- ARGV[5]  = color (palette index; 0 = eraser, still costs 1)
+-- ARGV[6]  = paletteSize
+-- ARGV[7]  = nowMs
+-- ARGV[8]  = refillIntervalMs
+-- ARGV[9]  = refillAmount
+-- ARGV[10] = gaugeMax            (effective max = base + bonus, computed by the gateway)
+-- ARGV[11] = gaugeTtlMs          (TTL on the gauge hash; 0 = never expire)
+-- ARGV[12] = deltaChannel        (pub/sub channel for fan-out; "" disables publish)
+--
+-- Returns: { status, charges, max, cooldownUntil }
+--   status        = "ok" | "cooldown" | "out_of_bounds" | "invalid_color"
+--   charges       = charges remaining after the call
+--   max           = effective max in force this call
+--   cooldownUntil = epoch ms the next charge lands (0 = gauge full). On a
+--                   rejected placement this is when the viewer may place again.
+
+local x          = tonumber(ARGV[1])
+local y          = tonumber(ARGV[2])
+local width      = tonumber(ARGV[3])
+local height     = tonumber(ARGV[4])
+local color      = tonumber(ARGV[5])
+local paletteSize= tonumber(ARGV[6])
+local now        = tonumber(ARGV[7])
+local interval   = tonumber(ARGV[8])
+local amount     = tonumber(ARGV[9])
+local max        = tonumber(ARGV[10])
+local gaugeTtl   = tonumber(ARGV[11])
+local deltaChan  = ARGV[12]
+
+-- Defensive validation (the gateway also validates before calling).
+if x < 0 or y < 0 or x >= width or y >= height then
+  return { "out_of_bounds", 0, 0, 0 }
+end
+if color < 0 or color >= paletteSize then
+  return { "invalid_color", 0, 0, 0 }
+end
+
+-- Load + lazy-refill the gauge (mirror of gauge.ts refillGauge).
+local charges = tonumber(redis.call("HGET", KEYS[2], "c"))
+local ts      = tonumber(redis.call("HGET", KEYS[2], "ts"))
+if charges == nil then
+  -- First placement on this canvas → arrive full.
+  charges = max
+  ts = now
+end
+
+local elapsed = now - ts
+if elapsed < 0 then elapsed = 0 end
+local ticks = math.floor(elapsed / interval)
+if ticks > 0 then
+  charges = math.min(max, charges + ticks * amount)
+  ts = ts + ticks * interval
+end
+if charges >= max then
+  charges = max
+  ts = now
+end
+
+-- Not enough charge → reject, report when the next charge lands.
+if charges < 1 then
+  return { "cooldown", 0, max, ts + interval }
+end
+
+-- Atomic write: single byte at the row-major offset.
+local offset = y * width + x
+redis.call("SETRANGE", KEYS[1], offset, string.char(color))
+
+-- Assign a global, monotonic sequence to this write and fan it out. Done inside
+-- the same atomic script as the SETRANGE, so seq order == write order, and the
+-- value is shared across every gateway instance — which is what lets a
+-- reconnecting client replay exactly what it missed (resync, F7/FEN-13). It
+-- also labels the snapshot a fresh client reads.
+--
+-- Guarded on KEYS[3] so callers that don't care about fan-out (e.g. unit
+-- harnesses passing only the bitmap + gauge keys) still work.
+if KEYS[3] then
+  local seq = redis.call("INCR", KEYS[3])
+  if deltaChan ~= "" then
+    redis.call("PUBLISH", deltaChan, seq .. "," .. x .. "," .. y .. "," .. color)
+  end
+end
+
+-- Consume one charge and persist.
+charges = charges - 1
+redis.call("HSET", KEYS[2], "c", charges, "ts", ts)
+if gaugeTtl > 0 then
+  redis.call("PEXPIRE", KEYS[2], gaugeTtl)
+end
+
+-- After a consume charges < max, so the next tick is always pending.
+return { "ok", charges, max, ts + interval }

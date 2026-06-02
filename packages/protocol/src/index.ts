@@ -78,7 +78,14 @@ export function isInBounds(x: number, y: number, width = CANVAS_WIDTH, height = 
 /** Client → Server messages (sent as JSON text frames). */
 export type ClientMessage =
   | { t: "place"; x: number; y: number; color: number; seq?: number }
-  | { t: "ping" };
+  | { t: "ping" }
+  /**
+   * Reconnect resync request. `seq` is the highest delta sequence the client
+   * has already applied (0 if none). The gateway replays writes with seq >
+   * this value when they are still buffered, otherwise it answers with
+   * `resyncRequired` followed by a fresh snapshot. See contracts/ws-protocol.md.
+   */
+  | { t: "resync"; seq: number };
 
 /** Reasons the server may reject a placement or connection. */
 export type ErrorCode =
@@ -90,6 +97,21 @@ export type ErrorCode =
   | "banned"
   | "internal";
 
+/**
+ * The viewer's pixel gauge (token bucket) for display — decision D1. Sent on
+ * every placement ack and whenever the gateway pushes a refresh, so the web UI
+ * and OBS overlay can render current/max and a countdown to the next charge.
+ * The numeric mechanics live server-side (@canvas/redis-scripts gauge).
+ */
+export interface GaugeState {
+  /** Charges available right now (post lazy-refill). */
+  charges: number;
+  /** Effective maximum = gaugeMaxBase + per-user upgrade bonus. */
+  max: number;
+  /** Epoch ms the next charge lands; 0 when the gauge is full. */
+  cooldownUntil: number;
+}
+
 /** Server → Client messages (sent as JSON text frames). */
 export type ServerMessage =
   | {
@@ -99,9 +121,29 @@ export type ServerMessage =
       height: number;
       /** epoch ms until which the authenticated user is on cooldown (0 = ready) */
       cooldownUntil: number;
+      /**
+       * Highest delta sequence reflected by the snapshot the client is about to
+       * receive. The client tracks this and sends it back in a `resync` after a
+       * reconnect so the gateway can compute what it missed.
+       */
+      seq: number;
     }
-  | { t: "ack"; seq: number; cooldownUntil: number }
+  | ({ t: "ack"; seq: number } & GaugeState)
   | { t: "cooldown"; until: number }
+  /**
+   * Unsolicited gauge refresh (e.g. after a passive refill tick or an upgrade
+   * that raised the ceiling). Lets the client update current/max/countdown
+   * without placing. Carries the same {charges, max, cooldownUntil} as an ack.
+   */
+  | ({ t: "gauge" } & GaugeState)
+  /** Current number of connected viewers across all gateway instances (presence). */
+  | { t: "viewerCount"; count: number }
+  /**
+   * The gateway cannot serve an incremental resync (the requested seq has aged
+   * out of the buffer, or it landed on a fresh instance). A full snapshot frame
+   * follows immediately; the client should replace its canvas, not reload the page.
+   */
+  | { t: "resyncRequired" }
   | { t: "error"; code: ErrorCode; message: string; seq?: number }
   | { t: "pong" };
 
@@ -116,24 +158,37 @@ export function decodeJson<T = ClientMessage | ServerMessage>(data: string): T {
 // ─────────────────────────────────────────────────────────────────────────────
 // Binary-frame protocol (ArrayBuffer)
 //
-// All binary frames begin with a 1-byte opcode. Multi-byte integers are
-// big-endian (network order).
+// All binary frames begin with a 1-byte opcode followed by a u32 sequence
+// number. Multi-byte integers are big-endian (network order).
+//
+// The `seq` carried by every frame is the gateway's global, monotonically
+// increasing write counter (Redis canvas:writes:count). It is what makes
+// reconnect-resync possible: a client remembers the seq of the last frame it
+// applied, and on reconnect asks the gateway to replay everything after it
+// (see ClientMessage `resync`). Because a live WebSocket delivers frames in
+// order over TCP, the client can only ever miss frames across a disconnect —
+// never mid-stream — so a single per-frame seq is sufficient to detect and
+// repair gaps.
 //
 //   SNAPSHOT (0x01): full canvas, palette-indexed, 1 byte/pixel, row-major.
-//     [u8 op=0x01][u16 width][u16 height][u8 pixels[width*height]]
+//     [u8 op=0x01][u32 seq][u16 width][u16 height][u8 pixels[width*height]]
 //
-//   DELTA (0x02): a coalesced batch of pixel writes since the last frame.
-//     [u8 op=0x02][u16 count][ {u16 x, u16 y, u8 color} * count ]
+//   DELTA (0x02): a coalesced batch of pixel writes. `seq` is the highest
+//     write sequence included in this batch (last-write-wins per pixel).
+//     [u8 op=0x02][u32 seq][u16 count][ {u16 x, u16 y, u8 color} * count ]
 //
 // Rationale for binary + palette indices: the canvas IS a byte string in Redis,
 // so the snapshot is a single GET with zero transcoding, and a delta is 5 bytes
-// per pixel. See ADR-0002 (D2).
+// per pixel. See ADR-0002 (D2). The per-frame seq was added for F7 (FEN-13)
+// before any client consumed the format; PROTOCOL_VERSION stays 1.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const OP_SNAPSHOT = 0x01;
 export const OP_DELTA = 0x02;
 
 export const DELTA_RECORD_BYTES = 5; // u16 x + u16 y + u8 color
+export const SNAPSHOT_HEADER_BYTES = 9; // u8 op + u32 seq + u16 width + u16 height
+export const DELTA_HEADER_BYTES = 7; // u8 op + u32 seq + u16 count
 
 export interface PixelWrite {
   x: number;
@@ -141,20 +196,27 @@ export interface PixelWrite {
   color: number;
 }
 
-export function encodeSnapshot(pixels: Uint8Array, width = CANVAS_WIDTH, height = CANVAS_HEIGHT): ArrayBuffer {
+export function encodeSnapshot(
+  pixels: Uint8Array,
+  seq: number,
+  width = CANVAS_WIDTH,
+  height = CANVAS_HEIGHT,
+): ArrayBuffer {
   if (pixels.length !== width * height) {
     throw new Error(`snapshot size mismatch: got ${pixels.length}, expected ${width * height}`);
   }
-  const buf = new ArrayBuffer(5 + pixels.length);
+  const buf = new ArrayBuffer(SNAPSHOT_HEADER_BYTES + pixels.length);
   const view = new DataView(buf);
   view.setUint8(0, OP_SNAPSHOT);
-  view.setUint16(1, width);
-  view.setUint16(3, height);
-  new Uint8Array(buf, 5).set(pixels);
+  view.setUint32(1, seq >>> 0);
+  view.setUint16(5, width);
+  view.setUint16(7, height);
+  new Uint8Array(buf, SNAPSHOT_HEADER_BYTES).set(pixels);
   return buf;
 }
 
 export interface DecodedSnapshot {
+  seq: number;
   width: number;
   height: number;
   pixels: Uint8Array;
@@ -163,18 +225,20 @@ export interface DecodedSnapshot {
 export function decodeSnapshot(buf: ArrayBuffer): DecodedSnapshot {
   const view = new DataView(buf);
   if (view.getUint8(0) !== OP_SNAPSHOT) throw new Error("not a snapshot frame");
-  const width = view.getUint16(1);
-  const height = view.getUint16(3);
-  const pixels = new Uint8Array(buf.slice(5, 5 + width * height));
-  return { width, height, pixels };
+  const seq = view.getUint32(1);
+  const width = view.getUint16(5);
+  const height = view.getUint16(7);
+  const pixels = new Uint8Array(buf.slice(SNAPSHOT_HEADER_BYTES, SNAPSHOT_HEADER_BYTES + width * height));
+  return { seq, width, height, pixels };
 }
 
-export function encodeDelta(writes: ReadonlyArray<PixelWrite>): ArrayBuffer {
-  const buf = new ArrayBuffer(3 + writes.length * DELTA_RECORD_BYTES);
+export function encodeDelta(seq: number, writes: ReadonlyArray<PixelWrite>): ArrayBuffer {
+  const buf = new ArrayBuffer(DELTA_HEADER_BYTES + writes.length * DELTA_RECORD_BYTES);
   const view = new DataView(buf);
   view.setUint8(0, OP_DELTA);
-  view.setUint16(1, writes.length);
-  let off = 3;
+  view.setUint32(1, seq >>> 0);
+  view.setUint16(5, writes.length);
+  let off = DELTA_HEADER_BYTES;
   for (const w of writes) {
     view.setUint16(off, w.x);
     view.setUint16(off + 2, w.y);
@@ -184,21 +248,27 @@ export function encodeDelta(writes: ReadonlyArray<PixelWrite>): ArrayBuffer {
   return buf;
 }
 
-export function decodeDelta(buf: ArrayBuffer): PixelWrite[] {
+export interface DecodedDelta {
+  seq: number;
+  writes: PixelWrite[];
+}
+
+export function decodeDelta(buf: ArrayBuffer): DecodedDelta {
   const view = new DataView(buf);
   if (view.getUint8(0) !== OP_DELTA) throw new Error("not a delta frame");
-  const count = view.getUint16(1);
-  const out: PixelWrite[] = [];
-  let off = 3;
+  const seq = view.getUint32(1);
+  const count = view.getUint16(5);
+  const writes: PixelWrite[] = [];
+  let off = DELTA_HEADER_BYTES;
   for (let i = 0; i < count; i++) {
-    out.push({
+    writes.push({
       x: view.getUint16(off),
       y: view.getUint16(off + 2),
       color: view.getUint8(off + 4),
     });
     off += DELTA_RECORD_BYTES;
   }
-  return out;
+  return { seq, writes };
 }
 
 /** Peek the opcode of an incoming binary frame to route it. */
