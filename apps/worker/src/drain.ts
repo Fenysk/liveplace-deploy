@@ -42,6 +42,13 @@ export interface DrainOutcome {
   dropped: number;
   /** Highest version drained this cycle (0 if none). */
   maxVersion: number;
+  /**
+   * Epoch ms of the newest placement durably written this cycle (0 if none).
+   * Feeds the F12 gallery `lastActivityAt` off the hot path (FEN-33); it is the
+   * activity sort key, NOT a correctness signal for the durable flush. Only set
+   * on a confirmed flush (canvasFound), so activity advances for persisted work.
+   */
+  newestPlacementTs: number;
   /** The cursor after this cycle (unchanged from input if nothing advanced). */
   cursor: string;
 }
@@ -53,7 +60,7 @@ export interface DrainOutcome {
 export async function drainOnce(d: DrainDeps, cursor: string): Promise<DrainOutcome> {
   const entries = await readNew(d.redis, d.slug, cursor, d.maxBatch);
   if (entries.length === 0) {
-    return { empty: true, canvasFound: true, inserted: 0, read: 0, dropped: 0, maxVersion: 0, cursor };
+    return { empty: true, canvasFound: true, inserted: 0, read: 0, dropped: 0, maxVersion: 0, newestPlacementTs: 0, cursor };
   }
 
   let dropped = 0;
@@ -64,7 +71,7 @@ export async function drainOnce(d: DrainDeps, cursor: string): Promise<DrainOutc
 
   // lastId is always set here (entries.length > 0), but type-guard for safety.
   if (!batch.lastId) {
-    return { empty: true, canvasFound: true, inserted: 0, read: entries.length, dropped, maxVersion: 0, cursor };
+    return { empty: true, canvasFound: true, inserted: 0, read: entries.length, dropped, maxVersion: 0, newestPlacementTs: 0, cursor };
   }
 
   // Durable write. Idempotent on (canvasId, version); also advances the durable
@@ -82,12 +89,19 @@ export async function drainOnce(d: DrainDeps, cursor: string): Promise<DrainOutc
       read: entries.length,
       dropped,
       maxVersion: 0,
+      newestPlacementTs: 0,
       cursor,
     };
   }
 
   // Flush confirmed → advance the local cursor and trim the drained tail.
   await trimStream(d.redis, d.slug, batch.lastId);
+
+  // Newest placement ts in the persisted batch → F12 gallery activity (FEN-33).
+  let newestPlacementTs = 0;
+  for (const p of batch.placements) {
+    if (p.ts > newestPlacementTs) newestPlacementTs = p.ts;
+  }
 
   return {
     empty: false,
@@ -96,6 +110,7 @@ export async function drainOnce(d: DrainDeps, cursor: string): Promise<DrainOutc
     read: entries.length,
     dropped,
     maxVersion: res.maxVersion,
+    newestPlacementTs,
     cursor: batch.lastId,
   };
 }

@@ -38,6 +38,10 @@ export interface WorkerConfig {
   snapshotIntervalMs: number;
   /** Also snapshot once this many versions have accrued since the last one. */
   snapshotEveryNVersions: number;
+  /** Flush the live viewer count onto the F2 gallery row every N ms (FEN-33). */
+  viewerFlushIntervalMs: number;
+  /** Gallery thumbnail long-side cap in px (0 disables thumbnail generation). */
+  thumbnailMaxLongSide: number;
 }
 
 export function loadConfig(): WorkerConfig {
@@ -51,5 +55,7 @@ export function loadConfig(): WorkerConfig {
     flushMaxBatch: num("FLUSH_MAX_BATCH", 500),
     snapshotIntervalMs: num("SNAPSHOT_INTERVAL_MS", 60_000),
     snapshotEveryNVersions: num("SNAPSHOT_EVERY_N_VERSIONS", 5_000),
+    viewerFlushIntervalMs: num("VIEWER_FLUSH_INTERVAL_MS", 10_000),
+    thumbnailMaxLongSide: num("THUMBNAIL_MAX_LONG_SIDE", 256),
   };
 }

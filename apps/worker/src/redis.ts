@@ -16,6 +16,45 @@ export function createRedis(url: string): Redis {
 }
 
 /**
+ * SCAN glob root for the gateway's per-instance presence keys. This is a
+ * cross-app Redis convention OWNED by the gateway (`apps/gateway/src/schema.ts`,
+ * `PRESENCE_KEY_PREFIX`): each gateway instance SETs `presence:inst:{id}` to its
+ * local viewer count with a TTL, so a crashed instance self-heals. The worker
+ * only READS these to flush the gallery `viewerCount` off the hot path (FEN-33);
+ * it never writes them. Kept in sync with the gateway by the contract doc
+ * (`docs/contracts/persistence-worker.md`).
+ */
+const PRESENCE_KEY_PREFIX = "presence:inst:";
+
+/**
+ * Sum the live per-instance presence keys into a single global viewer count
+ * (FEN-33). MVP is single-canvas (canvasId == slug), so the global presence sum
+ * is that canvas's viewer count; per-canvas presence is a future extension when
+ * the gateway namespaces presence by canvas. Stale instances simply expire, so
+ * the sum self-corrects. Missing / non-numeric values count as 0. Returns 0 when
+ * no instance is live.
+ */
+export async function readGlobalViewerCount(redis: Redis): Promise<number> {
+  const presenceKeys: string[] = [];
+  let cursor = "0";
+  do {
+    const [next, batch] = await redis.scan(
+      cursor,
+      "MATCH",
+      `${PRESENCE_KEY_PREFIX}*`,
+      "COUNT",
+      100,
+    );
+    cursor = next;
+    presenceKeys.push(...batch);
+  } while (cursor !== "0");
+
+  if (presenceKeys.length === 0) return 0;
+  const values = await redis.mget(presenceKeys);
+  return values.reduce((sum: number, v) => sum + (v ? Number(v) || 0 : 0), 0);
+}
+
+/**
  * Read up to `count` brand-new stream entries strictly after `cursor` (XREAD is
  * exclusive of the given id by design — no off-by-one and no Redis-6.2 exclusive
  * range syntax needed). `cursor` is `flushState.lastStreamId`, or "0" to start

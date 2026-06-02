@@ -15,9 +15,10 @@
 import { hostname } from "node:os";
 import { loadConfig } from "./config.js";
 import { ConvexDurable } from "./convex.js";
-import { createRedis, readCanvasSnapshot } from "./redis.js";
+import { createRedis, readCanvasSnapshot, readGlobalViewerCount } from "./redis.js";
 import { drainOnce } from "./drain.js";
 import { buildAndRecord, shouldSnapshot, type SnapshotState } from "./snapshot.js";
+import { buildAndRecordThumbnail } from "./thumbnail.js";
 import { restoreIfNeeded } from "./restore.js";
 import { flushLockKey, withLock } from "./lock.js";
 
@@ -84,12 +85,14 @@ async function main(): Promise<void> {
     try {
       await withLock(redis, flushLockKey(cfg.slug), token, Math.max(5_000, cfg.flushIntervalMs * 3), async () => {
         let guard = 0;
+        let newestActivityTs = 0;
         for (;;) {
           const out = await drainOnce(
             { redis, convex, slug: cfg.slug, maxBatch: cfg.flushMaxBatch, now: Date.now, log },
             cursor,
           );
           cursor = out.cursor;
+          if (out.newestPlacementTs > newestActivityTs) newestActivityTs = out.newestPlacementTs;
           if (out.inserted > 0 || out.dropped > 0) {
             log("drained", { inserted: out.inserted, dropped: out.dropped, maxVersion: out.maxVersion });
           }
@@ -102,6 +105,17 @@ async function main(): Promise<void> {
           }
         }
 
+        // F12 gallery activity (FEN-33): advance lastActivityAt to the newest
+        // drained placement. Off the hot path + best-effort — a gallery-write
+        // failure must never strand or retry the durable drain above.
+        if (newestActivityTs > 0) {
+          try {
+            await convex.setGalleryFields(cfg.slug, { lastActivityAt: newestActivityTs });
+          } catch (err) {
+            log("gallery activity flush failed (ignored)", { err: String(err) });
+          }
+        }
+
         // Snapshot policy: read the current head + pixels atomically.
         const now = Date.now();
         const { seq } = await readCanvasSnapshot(redis, cfg.slug, width, height);
@@ -110,6 +124,25 @@ async function main(): Promise<void> {
           snapState.lastVersion = res.version;
           snapState.lastAtMs = now;
           log("snapshot recorded", { version: res.version, bytes: res.bytes });
+
+          // Derive the gallery thumbnail from the snapshot we just built (FEN-33).
+          // Best-effort + off the drain path: a thumbnail failure must never
+          // strand the durable snapshot, so it gets its own try/catch and reuses
+          // the snapshot bytes (no extra Redis read, version stays aligned).
+          if (cfg.thumbnailMaxLongSide > 0) {
+            try {
+              const t = await buildAndRecordThumbnail(
+                convex,
+                cfg.slug,
+                res.version,
+                res.blob,
+                cfg.thumbnailMaxLongSide,
+              );
+              if (t) log("thumbnail recorded", { version: res.version, ...t });
+            } catch (err) {
+              log("thumbnail failed (ignored)", { version: res.version, err: String(err) });
+            }
+          }
         }
       });
     } catch (err) {
@@ -121,11 +154,33 @@ async function main(): Promise<void> {
 
   const timer = setInterval(() => void tick(), cfg.flushIntervalMs);
 
+  // F12 gallery viewer count (FEN-33): periodically flush the live presence total
+  // (summed from the gateway's per-instance `presence:inst:*` keys) onto the F2
+  // row — NOT per pixel (G-A1), purely off the hot path. Best-effort: a failed
+  // read/write just leaves the last value (the gallery degrades to it / 0). Runs
+  // outside the flush lock — it's an independent, idempotent presence level.
+  let inViewers = false;
+  async function viewersTick(): Promise<void> {
+    if (stopping || inViewers) return;
+    inViewers = true;
+    try {
+      const viewerCount = await readGlobalViewerCount(redis);
+      const r = await convex.setGalleryFields(cfg.slug, { viewerCount });
+      if (r.updated) log("gallery viewers flushed", { viewerCount });
+    } catch (err) {
+      log("gallery viewers flush failed (ignored)", { err: String(err) });
+    } finally {
+      inViewers = false;
+    }
+  }
+  const viewersTimer = setInterval(() => void viewersTick(), cfg.viewerFlushIntervalMs);
+
   async function shutdown(sig: string): Promise<void> {
     if (stopping) return;
     stopping = true;
     log("shutting down", { sig });
     clearInterval(timer);
+    clearInterval(viewersTimer);
     // Let an in-flight tick finish, then close Redis.
     const deadline = Date.now() + 5_000;
     while (ticking && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));

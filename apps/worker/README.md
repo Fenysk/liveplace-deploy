@@ -31,6 +31,15 @@ It is the binary that joins the two ends built earlier:
    the latest snapshot + the replayed placement tail (`worker:getPlacementsSince`).
    No-op when Redis already holds the canvas (Redis stays authoritative).
 
+4. **Gallery activation** (FEN-33, F12) — off the hot path, the worker maintains
+   the public-gallery discovery fields ON the F2 canvas row via
+   `canvases:setGalleryFields` (idempotent + monotonic): `lastActivityAt` (newest
+   drained placement ts, after each drain), `viewerCount` (summed `presence:inst:*`
+   keys every `VIEWER_FLUSH_INTERVAL_MS`), and the thumbnail pointer
+   (`thumbnailStorageId`/`thumbnailVersion`, rendered from each new snapshot blob,
+   `src/thumbnail.ts`). All best-effort — a gallery-write failure never strands
+   the durable drain/snapshot.
+
 A best-effort Redis flush lock (`src/lock.ts`, `G-Perf4`) keeps two instances
 from double-draining; correctness does not depend on it.
 
@@ -52,6 +61,8 @@ All three MUST be the same value for a deployment.
 | `FLUSH_MAX_BATCH` | `500` | Entries per drain cycle |
 | `SNAPSHOT_INTERVAL_MS` | `60000` | Min time between snapshots |
 | `SNAPSHOT_EVERY_N_VERSIONS` | `5000` | Snapshot early after this many versions |
+| `VIEWER_FLUSH_INTERVAL_MS` | `10000` | Cadence for flushing live `viewerCount` onto the gallery row (FEN-33) |
+| `THUMBNAIL_MAX_LONG_SIDE` | `256` | Gallery thumbnail long-side cap in px (`0` disables thumbnails) |
 
 ## Build / test / run
 

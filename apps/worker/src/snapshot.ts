@@ -41,8 +41,10 @@ export function shouldSnapshot(
 export interface SnapshotResult {
   /** Canvas version captured by this snapshot. */
   version: number;
-  /** Encoded blob bytes (for logging / size). */
+  /** Encoded blob byte length (for logging / size). */
   bytes: number;
+  /** The encoded `OP_SNAPSHOT` blob, reused to derive the gallery thumbnail. */
+  blob: Uint8Array;
 }
 
 /**
@@ -61,5 +63,5 @@ export async function buildAndRecord(
   const { seq, pixels } = await readCanvasSnapshot(redis, slug, width, height);
   const buf = new Uint8Array(encodeSnapshot(pixels, seq, width, height));
   await convex.recordSnapshot(slug, seq, buf, nowMs);
-  return { version: seq, bytes: buf.byteLength };
+  return { version: seq, bytes: buf.byteLength, blob: buf };
 }

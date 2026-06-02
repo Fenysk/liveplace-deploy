@@ -78,6 +78,23 @@ const fns = {
   getFlushState: makeFunctionReference<"query", { slug: string }, FlushStateRow | null>(
     "worker:getFlushState",
   ),
+  /**
+   * F12 gallery discovery fields, written onto the F2 `canvases` row OFF the hot
+   * path (FEN-33, ADR-0001). Addressed by `slug`; server-side merge is idempotent
+   * + monotonic (`lastActivityAt` / `thumbnailVersion` never regress) and a slug
+   * with no F2 row is a no-op. Lives in the `canvases` module, not `worker`.
+   */
+  setGalleryFields: makeFunctionReference<
+    "mutation",
+    {
+      slug: string;
+      lastActivityAt?: number;
+      viewerCount?: number;
+      thumbnailStorageId?: string;
+      thumbnailVersion?: number;
+    },
+    { updated: boolean }
+  >("canvases:setGalleryFields"),
 } as const;
 
 /** Convert a parsed Redis stream record into the Convex placement shape. */
@@ -154,6 +171,52 @@ export class ConvexDurable {
       storageId,
       bytes: bytes.byteLength,
       now,
+    });
+  }
+
+  /**
+   * Patch the F12 gallery discovery fields onto the F2 row (FEN-33). Off the hot
+   * path; the server-side merge is idempotent + monotonic and a miss (no row for
+   * `slug`) is a no-op, so callers can fire-and-forget safely.
+   */
+  setGalleryFields(
+    slug: string,
+    fields: {
+      lastActivityAt?: number;
+      viewerCount?: number;
+      thumbnailStorageId?: string;
+      thumbnailVersion?: number;
+    },
+  ): Promise<{ updated: boolean }> {
+    return this.client.mutation(fns.setGalleryFields, { slug, ...fields });
+  }
+
+  /**
+   * Upload a derived gallery thumbnail blob and point the F2 row at it (FEN-33,
+   * ADR-0001: the preview pointer lives ON the row — no separate `thumbnails`
+   * table). `version` is the canvas version the preview depicts; `setGalleryFields`
+   * only advances it (and frees the superseded blob), so a retried thumbnail job
+   * is idempotent. Reuses `worker:generateUploadUrl` (same file storage).
+   */
+  async recordGalleryThumbnail(
+    slug: string,
+    version: number,
+    image: { buffer: Uint8Array; format: string; width: number; height: number },
+  ): Promise<{ updated: boolean }> {
+    const uploadUrl = await this.client.mutation(fns.generateUploadUrl, {});
+    const contentType = image.format === "webp" ? "image/webp" : "image/png";
+    const res = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body: image.buffer,
+    });
+    if (!res.ok) {
+      throw new Error(`thumbnail upload failed: ${res.status} ${res.statusText}`);
+    }
+    const { storageId } = (await res.json()) as { storageId: string };
+    return this.setGalleryFields(slug, {
+      thumbnailStorageId: storageId,
+      thumbnailVersion: version,
     });
   }
 }
