@@ -99,7 +99,12 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_authUserId", ["authUserId"])
-    .index("by_twitchId", ["twitchId"]),
+    .index("by_twitchId", ["twitchId"])
+    // F11 public profile (FEN-22): point lookup for `/u/{login}`. The `login` is
+    // stored lowercased so the index is the case-insensitive key the contract
+    // (docs/contracts/profile-read.md) requires. See ADR-0001 for the lineage
+    // reconciliation that froze this index into project-primary (FEN-37).
+    .index("by_login", ["login"]),
 
   /**
    * Per-(user, canvas) progression: cumulative score, lifetime placements, and
