@@ -146,6 +146,22 @@ export function userGaugeKey(userId: string): string {
  */
 export const DELTA_CHANNEL = "canvas:deltas";
 
+/**
+ * Per-canvas pub/sub channel the gateway nudges the persistence worker on before
+ * a mass moderation action (F8 / FEN-19). The moderation seam publishes a
+ * best-effort message here (ModerationService.requestFlush); the worker (FEN-71)
+ * subscribes on a dedicated connection and drains `canvas:{id}:stream` → Convex
+ * immediately instead of waiting for its poll tick, narrowing the freshness
+ * window for Convex's "what was underneath" derivation. Per-canvas (unlike the
+ * global DELTA_CHANNEL) so a nudge only wakes the drain for the affected canvas.
+ * Correctness never depends on it — moderate.lua streams overwrites durably and
+ * in version order, so the worker persists everything eventually regardless; the
+ * nudge only reduces latency. Shared here so gateway and worker agree on the name.
+ */
+export function flushRequestChannel(canvasId: string): string {
+  return `canvas:${canvasId}:flush:request`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Durable placement stream record (R2). The shape place.lua XADDs and the
 // persistence worker drains. Field order here MUST match the XADD in place.lua.

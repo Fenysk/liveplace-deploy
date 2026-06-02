@@ -21,6 +21,8 @@ import { buildAndRecord, shouldSnapshot, type SnapshotState } from "./snapshot.j
 import { buildAndRecordThumbnail } from "./thumbnail.js";
 import { restoreIfNeeded } from "./restore.js";
 import { flushLockKey, withLock } from "./lock.js";
+import { DrainCoalescer, subscribeFlushRequests } from "./nudge.js";
+import { flushRequestChannel } from "@canvas/redis-scripts";
 
 function log(msg: string, extra?: Record<string, unknown>): void {
   const line = extra ? `${msg} ${JSON.stringify(extra)}` : msg;
@@ -74,14 +76,15 @@ async function main(): Promise<void> {
   };
 
   let stopping = false;
-  let ticking = false;
 
   // Drain repeatedly within a tick until the stream is empty (bounded so one
   // canvas can't starve the loop), then evaluate the snapshot policy. The whole
-  // tick runs under the best-effort flush lock.
+  // tick runs under the best-effort flush lock. Both the periodic timer and the
+  // moderation flush nudge (FEN-71) route through the same DrainCoalescer below,
+  // which serializes runs and coalesces bursts — so a nudge racing the tick (or
+  // a mass action firing many nudges) costs at most one extra drain.
   async function tick(): Promise<void> {
-    if (stopping || ticking) return;
-    ticking = true;
+    if (stopping) return;
     try {
       await withLock(redis, flushLockKey(cfg.slug), token, Math.max(5_000, cfg.flushIntervalMs * 3), async () => {
         let guard = 0;
@@ -147,12 +150,28 @@ async function main(): Promise<void> {
       });
     } catch (err) {
       log("tick error (will retry)", { err: String(err) });
-    } finally {
-      ticking = false;
     }
   }
 
-  const timer = setInterval(() => void tick(), cfg.flushIntervalMs);
+  // Single serialization point for every drain trigger (timer + nudge).
+  const drainer = new DrainCoalescer(tick);
+  const timer = setInterval(() => void drainer.trigger(), cfg.flushIntervalMs);
+
+  // Honour the gateway's moderation flush nudge (FEN-71): subscribe on a
+  // DEDICATED connection (a subscribed ioredis client can't issue XREAD/XTRIM)
+  // and coalesce each message into an immediate drain. Best-effort — if the
+  // subscribe fails the periodic timer still drains, so we log and continue.
+  let flushSub: { close(): Promise<void> } | null = null;
+  try {
+    flushSub = await subscribeFlushRequests(
+      cfg.redisUrl,
+      flushRequestChannel(cfg.slug),
+      () => void drainer.trigger(),
+      log,
+    );
+  } catch (err) {
+    log("flush nudge subscribe failed (continuing on timer only)", { err: String(err) });
+  }
 
   // F12 gallery viewer count (FEN-33): periodically flush the live presence total
   // (summed from the gateway's per-instance `presence:inst:*` keys) onto the F2
@@ -181,9 +200,10 @@ async function main(): Promise<void> {
     log("shutting down", { sig });
     clearInterval(timer);
     clearInterval(viewersTimer);
-    // Let an in-flight tick finish, then close Redis.
+    // Stop accepting new nudges, then let an in-flight drain finish, then close.
+    if (flushSub) await flushSub.close().catch(() => {});
     const deadline = Date.now() + 5_000;
-    while (ticking && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    while (drainer.isRunning && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
     await redis.quit().catch(() => redis.disconnect());
     process.exit(0);
   }

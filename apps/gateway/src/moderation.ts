@@ -27,18 +27,15 @@ import {
   parseModerateResult,
   canvasKeys,
   DELTA_CHANNEL,
+  flushRequestChannel,
   type ModerationCell,
 } from "@canvas/redis-scripts";
 
-/**
- * Pub/sub channel a moderation flush request is published on. The persistence
- * worker (FEN-17/FEN-57) subscribes to drain `canvas:{id}:stream` immediately
- * rather than waiting for its poll tick. Defined here until the worker honours it
- * (tracked follow-up); publishing with no subscriber is a harmless no-op.
- */
-export function flushRequestChannel(canvasId: string): string {
-  return `canvas:${canvasId}:flush:request`;
-}
+// `flushRequestChannel` is the shared per-canvas nudge channel, now owned by
+// @canvas/redis-scripts (alongside DELTA_CHANNEL) so the gateway publisher and
+// the worker subscriber (FEN-71) agree on the name from one source. Re-exported
+// here for the existing gateway callers/tests that import it from this module.
+export { flushRequestChannel };
 
 /** Thrown when a moderation request body is malformed → HTTP 400 (caller's fault). */
 export class ModerationRequestError extends Error {}
