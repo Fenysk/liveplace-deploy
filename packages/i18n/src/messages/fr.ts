@@ -53,4 +53,5 @@ export const fr: Catalog = {
   "common.loading": "Chargement…",
   "common.error": "Une erreur est survenue",
   "common.retry": "Réessayer",
+  "common.loadMore": "Voir plus",
 };

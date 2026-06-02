@@ -57,6 +57,7 @@ export const en = {
   "common.loading": "Loading…",
   "common.error": "Something went wrong",
   "common.retry": "Retry",
+  "common.loadMore": "Load more",
 } as const satisfies Record<string, string>;
 
 /** Union of every valid message key, derived from the English catalog. */
