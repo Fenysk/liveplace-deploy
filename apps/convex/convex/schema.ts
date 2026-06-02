@@ -132,4 +132,62 @@ export default defineSchema({
     .index("by_canvas_user", ["canvasId", "userId"]) // point lookup + upsert
     .index("by_user", ["userId"]) // F11 profile: all canvases for a user
     .index("by_canvas_points", ["canvasId", "points"]), // F10 leaderboard ranking
+
+  /**
+   * Durable persistence-worker side tables (FEN-17 / FEN-47, ADR-0001).
+   *
+   * The worker drains the Redis placement stream to Convex in idempotent batches
+   * (`worker:applyFlush`), periodically writes a binary snapshot blob
+   * (`worker:recordSnapshot`), and resumes from `flushState` after a restart.
+   * ALL three were string-`canvasId`-keyed in the retired worker lineage; per
+   * ADR-0001 (unify on the F2 canonical `canvases`) they are re-keyed to the F2
+   * `id("canvases")`, resolved from the worker's WS `canvasId == slug` via
+   * `canvases.by_slug`. Off the hot path: Redis stays authoritative live; Convex
+   * is the durable mirror the UI reads. Additive — Convex schemas grow additively.
+   */
+
+  /**
+   * Append log of placements drained from the Redis stream (audit / replay /
+   * restore tail). Idempotent on (canvasId, version): a redelivered batch entry
+   * is dup-skipped, so the at-least-once flush stream stays exactly-once durable
+   * (R2). `version` is the canvas-monotonic global write sequence.
+   */
+  placements: defineTable({
+    canvasId: v.id("canvases"),
+    x: v.number(),
+    y: v.number(),
+    color: v.number(), // palette index; 0 = eraser
+    version: v.number(), // global monotonic write sequence (CANVAS_WRITE_COUNTER)
+    userId: v.optional(v.string()), // Better Auth user id; absent for anonymous
+    ts: v.number(),
+  })
+    .index("by_canvas_version", ["canvasId", "version"]) // dedup + restore tail (gt)
+    .index("by_user", ["userId"]), // cross-canvas audit
+
+  /**
+   * Periodic binary palette-indexed snapshots (the durable canvas source of
+   * truth, ADR-0002 bin-palette-v1). The worker uploads the blob to Convex file
+   * storage and records it here; on cold start it restores Redis from the latest
+   * snapshot, then replays `placements` with a higher `version`.
+   */
+  snapshots: defineTable({
+    canvasId: v.id("canvases"),
+    version: v.number(), // canvas version captured
+    storageId: v.id("_storage"), // bin-palette-v1 blob
+    bytes: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_canvas", ["canvasId"]) // latest-per-canvas (order desc)
+    .index("by_canvas_version", ["canvasId", "version"]),
+
+  /**
+   * Flush-worker resume cursor: the last Redis stream id acked per canvas, so a
+   * restarted worker rejoins the consumer group without gaps or replays.
+   */
+  flushState: defineTable({
+    canvasId: v.id("canvases"),
+    lastStreamId: v.string(),
+    lastFlushedVersion: v.number(),
+    updatedAt: v.number(),
+  }).index("by_canvas", ["canvasId"]),
 });

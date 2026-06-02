@@ -19,7 +19,7 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import { requireUserId } from "./lib/auth";
+import { requireUserId } from "./lib/identity";
 import {
   DEFAULT_POINTS_CONFIG,
   evaluatePurchase,
@@ -113,10 +113,51 @@ export const getGaugeBonus = query({
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Shared CA1 accrual: award `count` colored placements by a user on a canvas
+ * (+1 point / placement by default) and bump `pixelsPlaced` / `lastPlacedAt`,
+ * upserting the (user, canvas) row. Single-sourced here so the internal
+ * `awardPlacementPoints` entry and the persistence worker's batch flush
+ * (`worker:applyFlush`, FEN-47 / ADR-0001) accrue identically.
+ *
+ * `count` must be a positive integer. The caller owns at-least-once dedup at the
+ * stream level (flushState + placements idempotency), so each placement feeds
+ * this exactly once (R2). `now` is the flush time, used for `lastPlacedAt`.
+ */
+export async function accruePlacementPoints(
+  ctx: MutationCtx,
+  args: { canvasId: Id<"canvases">; userId: string; count: number; now: number },
+): Promise<{ points: number; pointsEarned: number; pixelsPlaced: number }> {
+  const { canvasId, userId, count, now } = args;
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new PointsRuleError("invalid_config", `count must be a positive integer; got ${count}.`);
+  }
+  const earned = pointsForPlacements(count, DEFAULT_POINTS_CONFIG);
+  const row = await findStats(ctx, canvasId, userId);
+  if (row) {
+    const points = row.points + earned;
+    const pointsEarned = row.pointsEarned + earned;
+    const pixelsPlaced = row.pixelsPlaced + count;
+    await ctx.db.patch(row._id, { points, pointsEarned, pixelsPlaced, lastPlacedAt: now, updatedAt: now });
+    return { points, pointsEarned, pixelsPlaced };
+  }
+  await ctx.db.insert("userCanvasStats", {
+    userId,
+    canvasId,
+    points: earned,
+    pointsEarned: earned,
+    pixelsPlaced: count,
+    gaugeMaxBonus: 0,
+    lastPlacedAt: now,
+    updatedAt: now,
+  });
+  return { points: earned, pointsEarned: earned, pixelsPlaced: count };
+}
+
+/**
  * Award points for `count` colored placements by a user on a canvas (CA1:
  * +1 point / colored placement by default). Internal: invoked once per drained
  * Redis batch by the persistence worker, which owns at-least-once dedup at the
- * stream level (flushState). Upserts the (user, canvas) row.
+ * stream level (flushState). Thin wrapper over the shared `accruePlacementPoints`.
  */
 export const awardPlacementPoints = internalMutation({
   args: {
@@ -126,31 +167,7 @@ export const awardPlacementPoints = internalMutation({
     now: v.number(),
   },
   returns: v.object({ points: v.number(), pointsEarned: v.number(), pixelsPlaced: v.number() }),
-  handler: async (ctx, { canvasId, userId, count, now }) => {
-    if (!Number.isInteger(count) || count <= 0) {
-      throw new PointsRuleError("invalid_config", `count must be a positive integer; got ${count}.`);
-    }
-    const earned = pointsForPlacements(count, DEFAULT_POINTS_CONFIG);
-    const row = await findStats(ctx, canvasId, userId);
-    if (row) {
-      const points = row.points + earned;
-      const pointsEarned = row.pointsEarned + earned;
-      const pixelsPlaced = row.pixelsPlaced + count;
-      await ctx.db.patch(row._id, { points, pointsEarned, pixelsPlaced, lastPlacedAt: now, updatedAt: now });
-      return { points, pointsEarned, pixelsPlaced };
-    }
-    await ctx.db.insert("userCanvasStats", {
-      userId,
-      canvasId,
-      points: earned,
-      pointsEarned: earned,
-      pixelsPlaced: count,
-      gaugeMaxBonus: 0,
-      lastPlacedAt: now,
-      updatedAt: now,
-    });
-    return { points: earned, pointsEarned: earned, pixelsPlaced: count };
-  },
+  handler: (ctx, args) => accruePlacementPoints(ctx, args),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
