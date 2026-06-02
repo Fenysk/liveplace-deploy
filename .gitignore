@@ -11,6 +11,8 @@ build/
 .env
 .env.*
 !.env.example
+# Coolify deploy inputs hold the API token + stack secrets (deploy.env.example is fine).
+infra/coolify/deploy.env
 
 # Convex
 apps/convex/.convex/
