@@ -44,6 +44,16 @@ const DEPLOY_ENV_PATH = join(REPO_ROOT, "infra", "coolify", "deploy.env");
 const ARGS = new Set(process.argv.slice(2));
 const NO_SMOKE = ARGS.has("--no-smoke");
 
+// HARD GUARDRAIL (Alexis, FEN-80): this script may ONLY act inside the LivePlace
+// Coolify project. Every other project on that instance (Personnel, Test,
+// Archives, Le Spawn, Compass, PeakSet, …) is off-limits. The target uuid is
+// baked here — not just read from env — so a stray env value can never point a
+// write at someone else's project. Overridable for a real project rename only
+// via COOLIFY_ALLOW_PROJECT_OVERRIDE=1 (logged loudly).
+const LIVEPLACE_PROJECT_UUID = "tgxjp2pout8sab9fp5edtbhb";
+// Default public Coolify endpoint for this deploy (shared on FEN-80, not a secret).
+const DEFAULT_COOLIFY_URL = "https://coolify.fenysk.fr";
+
 const DEPLOY_TIMEOUT_MS = Number(process.env.COOLIFY_DEPLOY_TIMEOUT_MS ?? 600_000);
 const POLL_INTERVAL_MS = Number(process.env.COOLIFY_POLL_INTERVAL_MS ?? 8_000);
 
@@ -86,8 +96,10 @@ const rel = (p) => p.replace(REPO_ROOT + "/", "");
 // ── config resolution ─────────────────────────────────────────────────────────
 function cfg() {
   const env = process.env;
-  const COOLIFY_URL = (env.COOLIFY_URL ?? "").replace(/\/$/, "");
-  const token = env.COOLIFY_API_TOKEN ?? "";
+  const COOLIFY_URL = (env.COOLIFY_URL || DEFAULT_COOLIFY_URL).replace(/\/$/, "");
+  // Alexis regenerated the token into COOLIFY_API_TOKEN_2 (the original
+  // COOLIFY_API_TOKEN is stale). Accept either; the _2 name wins if both exist.
+  const token = env.COOLIFY_API_TOKEN_2 || env.COOLIFY_API_TOKEN || "";
   const dryRun = ARGS.has("--dry-run") || !token;
 
   let base = env.PUBLIC_BASE_URL ?? "";
@@ -98,7 +110,7 @@ function cfg() {
     dryRun,
     COOLIFY_URL,
     token,
-    projectUuid: env.COOLIFY_PROJECT_UUID ?? "",
+    projectUuid: env.COOLIFY_PROJECT_UUID || LIVEPLACE_PROJECT_UUID,
     serverUuid: env.COOLIFY_SERVER_UUID ?? "",
     environmentName: env.COOLIFY_ENVIRONMENT_NAME ?? "production",
     appName: env.COOLIFY_APP_NAME ?? "liveplace",
@@ -202,9 +214,63 @@ function makeApi(c) {
   };
 }
 
+/** Enforce Alexis's hard guardrail: refuse to act outside the LivePlace project.
+ *  Checks the configured uuid against the baked-in one, then confirms with the
+ *  live API that the uuid actually resolves to the LivePlace project before any
+ *  write happens. A mismatch aborts — we never create/modify resources in a
+ *  project we did not mean to touch. */
+async function assertLiveplaceProject(api, c) {
+  const override = process.env.COOLIFY_ALLOW_PROJECT_OVERRIDE === "1";
+  if (c.projectUuid !== LIVEPLACE_PROJECT_UUID) {
+    if (!override) {
+      die(
+        `GUARDRAIL: target project ${c.projectUuid} is not the LivePlace project ` +
+          `(${LIVEPLACE_PROJECT_UUID}). Refusing to touch another Coolify project. ` +
+          `Set COOLIFY_ALLOW_PROJECT_OVERRIDE=1 only for a deliberate project rename.`,
+      );
+    }
+    log(`⚠ project override active: acting in ${c.projectUuid} (NOT the baked LivePlace uuid)`);
+  }
+  // Confirm the uuid really is the LivePlace project on this instance.
+  let project;
+  try {
+    project = await api("GET", `/projects/${c.projectUuid}`);
+  } catch (err) {
+    die(`GUARDRAIL: cannot read project ${c.projectUuid} (${err.message}) — aborting before any write.`);
+  }
+  const name = project.name ?? project.data?.name ?? "";
+  log(`· guardrail OK: project ${c.projectUuid} = "${name}"`);
+  if (!override && !/liveplace/i.test(name)) {
+    die(`GUARDRAIL: project ${c.projectUuid} is named "${name}", not LivePlace. Aborting.`);
+  }
+  return project;
+}
+
+/** Resolve the server to deploy onto. If COOLIFY_SERVER_UUID is unset, read the
+ *  instance's servers; use the only one automatically, otherwise list them and
+ *  ask the operator to pick — so the happy path needs no manual server lookup. */
+async function resolveServerUuid(api, c) {
+  if (c.serverUuid) return c.serverUuid;
+  const servers = await api("GET", "/servers");
+  const list = Array.isArray(servers) ? servers : servers.data ?? [];
+  if (list.length === 1) {
+    const uuid = list[0].uuid ?? list[0].data?.uuid;
+    log(`· auto-resolved the only server: ${uuid} (${list[0].name ?? "?"})`);
+    return uuid;
+  }
+  const opts = list.map((s) => `${s.uuid} (${s.name ?? "?"})`).join(", ");
+  die(`COOLIFY_SERVER_UUID unset and ${list.length} servers found — set it to one of: ${opts}`);
+}
+
 async function resolveApp(api, c) {
   if (c.appUuid) {
     const app = await api("GET", `/applications/${c.appUuid}`);
+    // Reuse path still honours the guardrail: the existing app must live in the
+    // LivePlace project, else a stray COOLIFY_APP_UUID could redeploy something else.
+    const appProject = app.project_uuid ?? app.environment?.project_uuid ?? app.data?.project_uuid;
+    if (appProject && appProject !== c.projectUuid && process.env.COOLIFY_ALLOW_PROJECT_OVERRIDE !== "1") {
+      die(`GUARDRAIL: app ${c.appUuid} belongs to project ${appProject}, not ${c.projectUuid}. Refusing to redeploy it.`);
+    }
     log(`· reusing app ${c.appUuid} (${app.name ?? c.appName})`);
     return c.appUuid;
   }
@@ -344,9 +410,12 @@ async function main() {
   }
 
   if (!c.COOLIFY_URL) die("COOLIFY_URL required.");
-  if (!c.projectUuid || !c.serverUuid) die("COOLIFY_PROJECT_UUID and COOLIFY_SERVER_UUID required.");
+  if (!c.projectUuid) die("COOLIFY_PROJECT_UUID required.");
 
   const api = makeApi(c);
+  // GUARDRAIL FIRST: confirm scopes + that we are pointed at LivePlace before any write.
+  await assertLiveplaceProject(api, c);
+  c.serverUuid = await resolveServerUuid(api, c);
   const uuid = await resolveApp(api, c);
   await pushEnvs(api, uuid, stack, buildTime);
   await triggerDeploy(api, uuid);
