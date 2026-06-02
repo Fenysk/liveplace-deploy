@@ -1,42 +1,38 @@
 /**
- * F8 moderation Convex layer (FEN-52) — the "brain" that authorises a mod
- * action, decides *which cells and colours* to write, journals it (CA6), then
- * triggers the already-shipped hot-path engine (`moderate.lua`, FEN-19) to apply
- * the bulk overwrite atomically.
+ * F8 moderation Convex layer (FEN-52) — implements the frozen contract
+ * docs/contracts/moderation.md (FE sign-off 2026-06-02). It authorises a mod
+ * action, derives *which cells + colours* to write from the durable `placements`
+ * log, journals it (CA6), then triggers the shipped hot-path engine
+ * (`moderate.lua`, FEN-19) to apply the bulk overwrite atomically. Convex never
+ * touches Redis (G-A1) — the overwrite, the `canvas:frozen` flag and the
+ * pre-action flush are dispatched over HTTP to the gateway's `/internal/*`
+ * endpoints (Dev Backend; see docs/contracts/moderation-internal.md). Until those
+ * exist / `GATEWAY_INTERNAL_URL` is set, the actions record durable state and
+ * report the dispatch as `gateway_not_configured` (no throw), so this layer is
+ * deployable and testable today.
  *
- * Split of responsibilities:
- *  - Pure decision logic (the stack fold that reconstructs "what was underneath")
- *    lives in ./lib/moderation.ts and is unit-tested with no runtime.
- *  - DB authz + reads/writes (ban list, moderator roster, deleted-pixel overlay,
- *    audit) run in transactional mutations here.
- *  - The Redis side-effects (apply the bulkDelta, SET/DEL `canvas:frozen`, force a
- *    flush before a mass action) are NOT done from Convex — Convex never touches
- *    Redis (G-A1). They are dispatched over HTTP to the gateway's `/internal/*`
- *    endpoints (FEN-19, out of scope here). Until those endpoints exist /
- *    `GATEWAY_INTERNAL_URL` is configured, the action records durable state and
- *    reports the dispatch as `skipped` so this layer is deployable and testable
- *    today and live-wires when the gateway ships.
+ * Restore model (the crux, F8.3): there is no dedicated event log. A removal
+ * stores a `pixelModeration` row keyed to its `auditLog` action (`modActionId`);
+ * restore re-applies `removedColor` for every cell that action touched
+ * (`by_modAction`), idempotent on already-`restored` rows.
  *
- * Authorisation: the canvas owner is always a moderator; delegated mods come from
- * `canvasModerators` (Twitch channel-mod sync, F8.5). Every public entrypoint is
- * an `action` (it performs the gateway fetch); the authz + DB work is delegated
- * to internal mutations/queries it orchestrates.
+ * Frozen mutation signatures: banAndWipe / unban / deletePixels / restore /
+ * setFrozen / syncTwitchMods. Each authorises against `canvasModerators` (active
+ * owner/mod), appends to `auditLog`, and forces a flush before any mass read.
  *
- * Convex deployment env consumed here: GATEWAY_INTERNAL_URL (base URL of the WS
- * gateway's internal API), GATEWAY_INTERNAL_SECRET (shared bearer for it),
- * TWITCH_CLIENT_ID (Helix Client-Id header for the mod sync).
+ * Convex env: GATEWAY_INTERNAL_URL, GATEWAY_INTERNAL_SECRET, TWITCH_CLIENT_ID.
  */
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery, query } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id, Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireUserId } from "./lib/identity";
-import { computeDeleteCells, computeRestoreCells, computeWipeCells, groupByCell } from "./lib/moderation";
-import type { ModerationCell, PlacementRow } from "./lib/moderation";
+import { planDelete, planWipe, removalCells } from "./lib/moderation";
+import type { PlacementRow, RemovalPlan } from "./lib/moderation";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared helpers (run inside query/mutation ctx).
+// Shared helpers (query/mutation ctx).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Owner OR active delegated moderator may act; otherwise throw. Returns the canvas. */
@@ -56,7 +52,7 @@ async function assertCanModerate(
   throw new Error("forbidden: only the canvas owner or a moderator may moderate.");
 }
 
-/** Palette size (colour count) for a canvas — the `paletteSize` the hot-path needs. */
+/** Palette size (colour count) — the `paletteSize` the hot-path needs. */
 async function paletteSizeOf(ctx: QueryCtx, canvas: Doc<"canvases">): Promise<number> {
   const palette = await ctx.db.get(canvas.paletteId);
   return palette ? palette.colors.length : 0;
@@ -71,52 +67,7 @@ async function loadPlacements(ctx: QueryCtx, canvasId: Id<"canvases">): Promise<
   return rows.map((r) => ({ x: r.x, y: r.y, color: r.color, version: r.version, userId: r.userId }));
 }
 
-/** Current global write sequence (max version seen in the durable log). */
-function maxVersion(placements: ReadonlyArray<PlacementRow>): number {
-  let m = 0;
-  for (const p of placements) if (p.version > m) m = p.version;
-  return m;
-}
-
-/**
- * Upsert the deleted-pixel overlay for a moderated cell (CA2): keep it recorded
- * with author + reason even though it is invisible on the canvas.
- */
-async function upsertOverlay(
-  ctx: MutationCtx,
-  row: {
-    canvasId: Id<"canvases">;
-    x: number;
-    y: number;
-    deleted: boolean;
-    removedColor: number;
-    removedUserId?: string;
-    revealedColor: number;
-    reason?: string;
-    actorUserId: string;
-    atVersion: number;
-    now: number;
-  },
-): Promise<void> {
-  const existing = await ctx.db
-    .query("pixelModeration")
-    .withIndex("by_canvas_cell", (q) => q.eq("canvasId", row.canvasId).eq("x", row.x).eq("y", row.y))
-    .unique();
-  const fields = {
-    deleted: row.deleted,
-    removedColor: row.removedColor,
-    removedUserId: row.removedUserId,
-    revealedColor: row.revealedColor,
-    reason: row.reason,
-    actorUserId: row.actorUserId,
-    atVersion: row.atVersion,
-    updatedAt: row.now,
-  };
-  if (existing) await ctx.db.patch(existing._id, fields);
-  else await ctx.db.insert("pixelModeration", { canvasId: row.canvasId, x: row.x, y: row.y, ...fields });
-}
-
-/** Append an audit row (CA6); returns its id so the action can stamp the dispatch result. */
+/** Append an audit row (CA6); returns its id (the `modActionId` overlays link to). */
 async function writeAudit(
   ctx: MutationCtx,
   row: {
@@ -142,6 +93,34 @@ async function writeAudit(
   });
 }
 
+/** Insert the `pixelModeration` overlay rows for a removal action (CA2). */
+async function recordRemovals(
+  ctx: MutationCtx,
+  args: {
+    canvasId: Id<"canvases">;
+    modActionId: Id<"auditLog">;
+    plans: ReadonlyArray<RemovalPlan>;
+    reason?: string;
+    now: number;
+  },
+): Promise<void> {
+  for (const p of args.plans) {
+    await ctx.db.insert("pixelModeration", {
+      canvasId: args.canvasId,
+      x: p.x,
+      y: p.y,
+      removedUserId: p.removedUserId,
+      removedColor: p.removedColor,
+      removedVersion: p.removedVersion,
+      underneathColor: p.underneathColor,
+      modActionId: args.modActionId,
+      reason: args.reason,
+      restored: false,
+      createdAt: args.now,
+    });
+  }
+}
+
 // A prepared moderation batch the action dispatches to the gateway.
 const preparedValidator = v.object({
   slug: v.string(),
@@ -152,11 +131,33 @@ const preparedValidator = v.object({
   auditId: v.id("auditLog"),
 });
 
+const metaValidator = v.object({
+  slug: v.string(),
+  width: v.number(),
+  height: v.number(),
+  paletteSize: v.number(),
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal mutations: authorise, decide cells, record durable state.
+// Internal authz + record mutations/queries.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** F8.1 — record the ban + overlay for the author's wiped pixels, return the batch. */
+/** Authorise + return the dispatch meta (slug/geometry) without mutating. */
+export const getActionMeta = internalQuery({
+  args: { canvasId: v.id("canvases"), actorUserId: v.string() },
+  returns: metaValidator,
+  handler: async (ctx, a) => {
+    const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
+    return {
+      slug: canvas.slug,
+      width: canvas.width,
+      height: canvas.height,
+      paletteSize: await paletteSizeOf(ctx, canvas),
+    };
+  },
+});
+
+/** F8.1 — upsert the ban + record removals for the author's wiped pixels. */
 export const prepareBanWipe = internalMutation({
   args: {
     canvasId: v.id("canvases"),
@@ -168,18 +169,20 @@ export const prepareBanWipe = internalMutation({
   returns: preparedValidator,
   handler: async (ctx, a) => {
     const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
-    const placements = await loadPlacements(ctx, a.canvasId);
-    const cells = computeWipeCells(placements, a.targetUserId);
-    const groups = groupByCell(placements);
-    const version = maxVersion(placements);
+    const plans = planWipe(await loadPlacements(ctx, a.canvasId), a.targetUserId);
 
-    // Upsert / lift-aware ban row.
     const ban = await ctx.db
       .query("bans")
       .withIndex("by_canvas_user", (q) => q.eq("canvasId", a.canvasId).eq("userId", a.targetUserId))
       .unique();
     if (ban) {
-      await ctx.db.patch(ban._id, { active: true, wiped: true, bannedBy: a.actorUserId, reason: a.reason });
+      await ctx.db.patch(ban._id, {
+        active: true,
+        bannedBy: a.actorUserId,
+        reason: a.reason,
+        liftedAt: undefined,
+        liftedBy: undefined,
+      });
     } else {
       await ctx.db.insert("bans", {
         canvasId: a.canvasId,
@@ -187,170 +190,139 @@ export const prepareBanWipe = internalMutation({
         bannedBy: a.actorUserId,
         reason: a.reason,
         active: true,
-        wiped: true,
         createdAt: a.now,
-      });
-    }
-
-    // CA2 overlay for every wiped cell.
-    for (const c of cells) {
-      const stack = groups.get(`${c.x},${c.y}`);
-      const top = stack ? stack[stack.length - 1] : undefined;
-      await upsertOverlay(ctx, {
-        canvasId: a.canvasId,
-        x: c.x,
-        y: c.y,
-        deleted: true,
-        removedColor: top?.color ?? 0,
-        removedUserId: a.targetUserId,
-        revealedColor: c.color,
-        reason: a.reason,
-        actorUserId: a.actorUserId,
-        atVersion: version,
-        now: a.now,
       });
     }
 
     const auditId = await writeAudit(ctx, {
       canvasId: a.canvasId,
-      action: "wipe",
+      action: "ban_wipe",
       actorUserId: a.actorUserId,
       targetUserId: a.targetUserId,
-      cellsAffected: cells.length,
+      cellsAffected: plans.length,
       reason: a.reason,
       detail: "dispatch_pending",
       now: a.now,
     });
+    await recordRemovals(ctx, { canvasId: a.canvasId, modActionId: auditId, plans, reason: a.reason, now: a.now });
 
     return {
       slug: canvas.slug,
       width: canvas.width,
       height: canvas.height,
       paletteSize: await paletteSizeOf(ctx, canvas),
-      cells,
+      cells: removalCells(plans),
       auditId,
     };
   },
 });
 
-/** F8.2 — record the overlay for unit/group deletes, return the batch. */
+/** F8.1 unban — keep the row, flip inactive; returns slug for the gateway ban push. */
+export const unbanMut = internalMutation({
+  args: { canvasId: v.id("canvases"), targetUserId: v.string(), actorUserId: v.string(), now: v.number() },
+  returns: v.object({ slug: v.string(), auditId: v.id("auditLog"), changed: v.boolean() }),
+  handler: async (ctx, a) => {
+    const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
+    const ban = await ctx.db
+      .query("bans")
+      .withIndex("by_canvas_user", (q) => q.eq("canvasId", a.canvasId).eq("userId", a.targetUserId))
+      .unique();
+    let changed = false;
+    if (ban && ban.active) {
+      await ctx.db.patch(ban._id, { active: false, liftedAt: a.now, liftedBy: a.actorUserId });
+      changed = true;
+    }
+    const auditId = await writeAudit(ctx, {
+      canvasId: a.canvasId,
+      action: "unban",
+      actorUserId: a.actorUserId,
+      targetUserId: a.targetUserId,
+      cellsAffected: 0,
+      now: a.now,
+    });
+    return { slug: canvas.slug, auditId, changed };
+  },
+});
+
+/** F8.2 — record removals for unit/group deletes. */
 export const prepareDelete = internalMutation({
   args: {
     canvasId: v.id("canvases"),
     actorUserId: v.string(),
-    targets: v.array(v.object({ x: v.number(), y: v.number() })),
+    cells: v.array(v.object({ x: v.number(), y: v.number() })),
     reason: v.optional(v.string()),
     now: v.number(),
   },
   returns: preparedValidator,
   handler: async (ctx, a) => {
     const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
-    const placements = await loadPlacements(ctx, a.canvasId);
-    const cells = computeDeleteCells(placements, a.targets);
-    const groups = groupByCell(placements);
-    const version = maxVersion(placements);
-
-    for (const c of cells) {
-      const stack = groups.get(`${c.x},${c.y}`);
-      const top = stack ? stack[stack.length - 1] : undefined;
-      await upsertOverlay(ctx, {
-        canvasId: a.canvasId,
-        x: c.x,
-        y: c.y,
-        deleted: true,
-        removedColor: top?.color ?? 0,
-        removedUserId: top?.userId,
-        revealedColor: c.color,
-        reason: a.reason,
-        actorUserId: a.actorUserId,
-        atVersion: version,
-        now: a.now,
-      });
-    }
+    const plans = planDelete(await loadPlacements(ctx, a.canvasId), a.cells);
 
     const auditId = await writeAudit(ctx, {
       canvasId: a.canvasId,
       action: "delete",
       actorUserId: a.actorUserId,
-      cellsAffected: cells.length,
+      cellsAffected: plans.length,
       reason: a.reason,
       detail: "dispatch_pending",
       now: a.now,
     });
+    await recordRemovals(ctx, { canvasId: a.canvasId, modActionId: auditId, plans, reason: a.reason, now: a.now });
 
     return {
       slug: canvas.slug,
       width: canvas.width,
       height: canvas.height,
       paletteSize: await paletteSizeOf(ctx, canvas),
-      cells,
+      cells: removalCells(plans),
       auditId,
     };
   },
 });
 
-/** F8.3 — rebuild targeted cells from the durable log; clear their overlay. */
+/** F8.3 — re-apply the removed colours of an action's cells; mark them restored. */
 export const prepareRestore = internalMutation({
   args: {
     canvasId: v.id("canvases"),
     actorUserId: v.string(),
-    targets: v.array(v.object({ x: v.number(), y: v.number() })),
-    reason: v.optional(v.string()),
+    modActionId: v.id("auditLog"),
     now: v.number(),
   },
   returns: preparedValidator,
   handler: async (ctx, a) => {
     const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
-    const placements = await loadPlacements(ctx, a.canvasId);
-    const cells = computeRestoreCells(placements, a.targets);
-    const version = maxVersion(placements);
-
-    for (const c of cells) {
-      const existing = await ctx.db
-        .query("pixelModeration")
-        .withIndex("by_canvas_cell", (q) => q.eq("canvasId", a.canvasId).eq("x", c.x).eq("y", c.y))
-        .unique();
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          deleted: false,
-          revealedColor: c.color,
-          reason: a.reason,
-          actorUserId: a.actorUserId,
-          atVersion: version,
-          updatedAt: a.now,
-        });
-      }
-    }
+    const rows = await ctx.db
+      .query("pixelModeration")
+      .withIndex("by_modAction", (q) => q.eq("modActionId", a.modActionId))
+      .collect();
+    const pending = rows.filter((r) => !r.restored && r.canvasId === a.canvasId);
 
     const auditId = await writeAudit(ctx, {
       canvasId: a.canvasId,
       action: "restore",
       actorUserId: a.actorUserId,
-      cellsAffected: cells.length,
-      reason: a.reason,
+      cellsAffected: pending.length,
       detail: "dispatch_pending",
       now: a.now,
     });
+    for (const r of pending) {
+      await ctx.db.patch(r._id, { restored: true, restoredActionId: auditId });
+    }
 
     return {
       slug: canvas.slug,
       width: canvas.width,
       height: canvas.height,
       paletteSize: await paletteSizeOf(ctx, canvas),
-      cells,
+      cells: pending.map((r) => ({ x: r.x, y: r.y, color: r.removedColor })),
       auditId,
     };
   },
 });
 
-/** F8.4 — owner/mod freeze toggle: patch the durable mirror + audit, return slug. */
+/** F8.4 — freeze toggle: patch the durable mirror + audit, return slug. */
 export const prepareFreeze = internalMutation({
-  args: {
-    canvasId: v.id("canvases"),
-    actorUserId: v.string(),
-    frozen: v.boolean(),
-    now: v.number(),
-  },
+  args: { canvasId: v.id("canvases"), actorUserId: v.string(), frozen: v.boolean(), now: v.number() },
   returns: v.object({ slug: v.string(), auditId: v.id("auditLog") }),
   handler: async (ctx, a) => {
     const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
@@ -367,12 +339,19 @@ export const prepareFreeze = internalMutation({
   },
 });
 
-/** Stamp the dispatch outcome onto an audit row after the gateway call resolves. */
-export const finalizeAudit = internalMutation({
-  args: { auditId: v.id("auditLog"), detail: v.string() },
+/** Stamp the dispatch outcome (+ optional bumped version) after the gateway call. */
+export const finalizeModerate = internalMutation({
+  args: { auditId: v.id("auditLog"), detail: v.string(), overwriteVersion: v.optional(v.number()) },
   returns: v.null(),
   handler: async (ctx, a) => {
     await ctx.db.patch(a.auditId, { detail: a.detail });
+    if (a.overwriteVersion !== undefined) {
+      const rows = await ctx.db
+        .query("pixelModeration")
+        .withIndex("by_modAction", (q) => q.eq("modActionId", a.auditId))
+        .collect();
+      for (const r of rows) await ctx.db.patch(r._id, { overwriteVersion: a.overwriteVersion });
+    }
     return null;
   },
 });
@@ -384,6 +363,7 @@ export const finalizeAudit = internalMutation({
 interface DispatchResult {
   dispatched: boolean;
   detail: string;
+  version?: number;
 }
 
 /** POST a JSON body to a gateway `/internal/*` route; degrade gracefully if unset. */
@@ -403,17 +383,17 @@ async function gatewayPost(path: string, body: unknown): Promise<DispatchResult>
     const text = await res.text().catch(() => "");
     throw new Error(`gateway_dispatch_failed ${path}: ${res.status} ${text}`.trim());
   }
-  return { dispatched: true, detail: `gateway ${res.status} ${path}` };
+  const json = (await res.json().catch(() => ({}))) as { version?: number };
+  return { dispatched: true, detail: `gateway ${res.status} ${path}`, version: json.version };
 }
 
 /**
- * Force a Redis→Convex flush before a mass action (issue scope §7) so the
- * durable log reflects pre-action state. Best-effort: if the gateway isn't
- * configured we proceed on the already-flushed log. The gateway owns the actual
- * buffer drain (FEN-17/FEN-19).
+ * Force a Redis→Convex flush before a mass action (issue scope §7) so the durable
+ * log reflects pre-action state. Best-effort: if the gateway isn't configured we
+ * proceed on the already-flushed log; the gateway owns the buffer drain.
  */
-async function forceFlush(slug: string): Promise<DispatchResult> {
-  return gatewayPost("/internal/flush", { slug });
+async function forceFlush(slug: string): Promise<void> {
+  await gatewayPost("/internal/flush", { slug }).catch(() => undefined);
 }
 
 /** Apply a computed cell batch via the hot-path engine (the gateway builds moderateArgs). */
@@ -422,14 +402,14 @@ async function dispatchModerate(batch: {
   width: number;
   height: number;
   paletteSize: number;
-  cells: ModerationCell[];
+  cells: Array<{ x: number; y: number; color: number }>;
 }): Promise<DispatchResult> {
   if (batch.cells.length === 0) return { dispatched: false, detail: "no_cells" };
   return gatewayPost("/internal/moderate", batch);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Public actions: orchestrate authz/record → flush → dispatch → finalise.
+// Public actions: authz → flush → record → dispatch → finalise.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const actionResult = v.object({
@@ -438,16 +418,16 @@ const actionResult = v.object({
   detail: v.string(),
 });
 
-/** F8.1 — ban an author and wipe their pixels (reveal what was underneath). */
+type ActionResult = { cellsAffected: number; dispatched: boolean; detail: string };
+
+/** F8.1 — ban an author and wipe their pixels (reveal what was underneath, CA1). */
 export const banAndWipe = action({
-  args: {
-    canvasId: v.id("canvases"),
-    targetUserId: v.string(),
-    reason: v.optional(v.string()),
-  },
+  args: { canvasId: v.id("canvases"), targetUserId: v.string(), reason: v.optional(v.string()) },
   returns: actionResult,
-  handler: async (ctx, a): Promise<{ cellsAffected: number; dispatched: boolean; detail: string }> => {
+  handler: async (ctx, a): Promise<ActionResult> => {
     const actorUserId = await requireUserId(ctx);
+    const meta = await ctx.runQuery(internal.moderation.getActionMeta, { canvasId: a.canvasId, actorUserId });
+    await forceFlush(meta.slug); // mass action: flush before reading state
     const batch = await ctx.runMutation(internal.moderation.prepareBanWipe, {
       canvasId: a.canvasId,
       targetUserId: a.targetUserId,
@@ -455,57 +435,77 @@ export const banAndWipe = action({
       reason: a.reason,
       now: Date.now(),
     });
-    await forceFlush(batch.slug).catch(() => undefined);
     const result = await dispatchModerate(batch);
-    await ctx.runMutation(internal.moderation.finalizeAudit, { auditId: batch.auditId, detail: result.detail });
+    await ctx.runMutation(internal.moderation.finalizeModerate, {
+      auditId: batch.auditId,
+      detail: result.detail,
+      overwriteVersion: result.version,
+    });
     return { cellsAffected: batch.cells.length, dispatched: result.dispatched, detail: result.detail };
   },
 });
 
-/** F8.2 — delete a single cell or a group. */
+/** F8.1 — lift a ban (gateway re-allows the user; CA6 audit). */
+export const unban = action({
+  args: { canvasId: v.id("canvases"), targetUserId: v.string() },
+  returns: v.object({ changed: v.boolean(), dispatched: v.boolean(), detail: v.string() }),
+  handler: async (ctx, a): Promise<{ changed: boolean; dispatched: boolean; detail: string }> => {
+    const actorUserId = await requireUserId(ctx);
+    const r = await ctx.runMutation(internal.moderation.unbanMut, {
+      canvasId: a.canvasId,
+      targetUserId: a.targetUserId,
+      actorUserId,
+      now: Date.now(),
+    });
+    const result = await gatewayPost("/internal/ban", { slug: r.slug, userId: a.targetUserId, banned: false });
+    await ctx.runMutation(internal.moderation.finalizeModerate, { auditId: r.auditId, detail: result.detail });
+    return { changed: r.changed, dispatched: result.dispatched, detail: result.detail };
+  },
+});
+
+/** F8.2 — delete a single cell or a group (reveal underneath, CA2/CA3). */
 export const deletePixels = action({
   args: {
     canvasId: v.id("canvases"),
-    targets: v.array(v.object({ x: v.number(), y: v.number() })),
+    cells: v.array(v.object({ x: v.number(), y: v.number() })),
     reason: v.optional(v.string()),
   },
   returns: actionResult,
-  handler: async (ctx, a): Promise<{ cellsAffected: number; dispatched: boolean; detail: string }> => {
+  handler: async (ctx, a): Promise<ActionResult> => {
     const actorUserId = await requireUserId(ctx);
+    const meta = await ctx.runQuery(internal.moderation.getActionMeta, { canvasId: a.canvasId, actorUserId });
+    await forceFlush(meta.slug);
     const batch = await ctx.runMutation(internal.moderation.prepareDelete, {
       canvasId: a.canvasId,
       actorUserId,
-      targets: a.targets,
+      cells: a.cells,
       reason: a.reason,
       now: Date.now(),
     });
-    await forceFlush(batch.slug).catch(() => undefined);
     const result = await dispatchModerate(batch);
-    await ctx.runMutation(internal.moderation.finalizeAudit, { auditId: batch.auditId, detail: result.detail });
+    await ctx.runMutation(internal.moderation.finalizeModerate, {
+      auditId: batch.auditId,
+      detail: result.detail,
+      overwriteVersion: result.version,
+    });
     return { cellsAffected: batch.cells.length, dispatched: result.dispatched, detail: result.detail };
   },
 });
 
-/** F8.3 — restore targeted cells from the durable log. */
-export const restorePixels = action({
-  args: {
-    canvasId: v.id("canvases"),
-    targets: v.array(v.object({ x: v.number(), y: v.number() })),
-    reason: v.optional(v.string()),
-  },
+/** F8.3 — restore every cell a prior moderation action removed (idempotent). */
+export const restore = action({
+  args: { canvasId: v.id("canvases"), modActionId: v.id("auditLog") },
   returns: actionResult,
-  handler: async (ctx, a): Promise<{ cellsAffected: number; dispatched: boolean; detail: string }> => {
+  handler: async (ctx, a): Promise<ActionResult> => {
     const actorUserId = await requireUserId(ctx);
     const batch = await ctx.runMutation(internal.moderation.prepareRestore, {
       canvasId: a.canvasId,
       actorUserId,
-      targets: a.targets,
-      reason: a.reason,
+      modActionId: a.modActionId,
       now: Date.now(),
     });
-    await forceFlush(batch.slug).catch(() => undefined);
     const result = await dispatchModerate(batch);
-    await ctx.runMutation(internal.moderation.finalizeAudit, { auditId: batch.auditId, detail: result.detail });
+    await ctx.runMutation(internal.moderation.finalizeModerate, { auditId: batch.auditId, detail: result.detail });
     return { cellsAffected: batch.cells.length, dispatched: result.dispatched, detail: result.detail };
   },
 });
@@ -523,7 +523,7 @@ export const setFrozen = action({
       now: Date.now(),
     });
     const result = await gatewayPost("/internal/freeze", { slug, frozen: a.frozen });
-    await ctx.runMutation(internal.moderation.finalizeAudit, { auditId, detail: result.detail });
+    await ctx.runMutation(internal.moderation.finalizeModerate, { auditId, detail: result.detail });
     return { frozen: a.frozen, dispatched: result.dispatched, detail: result.detail };
   },
 });
@@ -538,13 +538,12 @@ interface TwitchModerator {
   user_name?: string;
 }
 
-/** Resolve the canvas owner + their Twitch broadcaster id (authz happens here). */
+/** Resolve the canvas owner's Twitch broadcaster id (authz happens here). */
 export const prepareTwitchSync = internalQuery({
   args: { canvasId: v.id("canvases"), actorUserId: v.string() },
   returns: v.object({ broadcasterId: v.string() }),
   handler: async (ctx, a) => {
     const canvas = await assertCanModerate(ctx, a.canvasId, a.actorUserId);
-    // The broadcaster is the canvas owner; sync reads THEIR channel mods.
     const profile = await ctx.db
       .query("profiles")
       .withIndex("by_authUserId", (q) => q.eq("authUserId", canvas.ownerId))
@@ -556,7 +555,7 @@ export const prepareTwitchSync = internalQuery({
   },
 });
 
-/** Upsert the synced moderator roster, deactivating mods no longer present (CA5). */
+/** Upsert the synced roster, deactivating `twitch_sync` mods no longer present (CA5). */
 export const applyTwitchSync = internalMutation({
   args: {
     canvasId: v.id("canvases"),
@@ -574,7 +573,6 @@ export const applyTwitchSync = internalMutation({
   handler: async (ctx, a) => {
     const present = new Set(a.mods.map((m) => m.twitchId));
 
-    // Upsert each present mod; link to the app user id when the profile exists.
     for (const m of a.mods) {
       const profile = await ctx.db
         .query("profiles")
@@ -588,7 +586,7 @@ export const applyTwitchSync = internalMutation({
         userId: profile?.authUserId,
         login: m.login,
         displayName: m.displayName,
-        source: "twitch" as const,
+        source: "twitch_sync" as const,
         active: true,
         syncedAt: a.now,
       };
@@ -597,13 +595,14 @@ export const applyTwitchSync = internalMutation({
     }
 
     // Deactivate previously-synced Twitch mods who are no longer channel mods.
+    // Owner-granted (`source === "manual"`) rows are never touched by sync.
     let deactivated = 0;
-    const synced = await ctx.db
+    const active = await ctx.db
       .query("canvasModerators")
       .withIndex("by_canvas_active", (q) => q.eq("canvasId", a.canvasId).eq("active", true))
       .collect();
-    for (const row of synced) {
-      if (row.source === "twitch" && !present.has(row.twitchId)) {
+    for (const row of active) {
+      if (row.source === "twitch_sync" && !present.has(row.twitchId)) {
         await ctx.db.patch(row._id, { active: false, syncedAt: a.now });
         deactivated++;
       }
@@ -625,10 +624,11 @@ export const applyTwitchSync = internalMutation({
 /**
  * F8.5 — sync the owner's Twitch channel moderators into `canvasModerators`.
  * Uses the owner's auto-refreshed Twitch token (CA4, `auth:getTwitchAccessToken`)
- * and the Helix `/moderation/moderators` endpoint (needs the `moderation:read`
- * scope already requested at sign-in). Paginates the full roster.
+ * and Helix `GET /moderation/moderators` (needs the `moderation:read` scope
+ * granted at sign-in). Paginates the full roster. A synced mod gains rights with
+ * no owner action (CA5).
  */
-export const syncTwitchModerators = action({
+export const syncTwitchMods = action({
   args: { canvasId: v.id("canvases") },
   returns: v.object({ active: v.number(), deactivated: v.number() }),
   handler: async (ctx, a): Promise<{ active: number; deactivated: number }> => {
@@ -645,7 +645,6 @@ export const syncTwitchModerators = action({
 
     const mods: Array<{ twitchId: string; login?: string; displayName?: string }> = [];
     let cursor: string | undefined;
-    // Paginate Helix (100/page). Bounded loop guards against a runaway cursor.
     for (let page = 0; page < 100; page++) {
       const url = new URL("https://api.twitch.tv/helix/moderation/moderators");
       url.searchParams.set("broadcaster_id", broadcasterId);
@@ -658,10 +657,7 @@ export const syncTwitchModerators = action({
         const text = await res.text().catch(() => "");
         throw new Error(`twitch_helix_failed: ${res.status} ${text}`.trim());
       }
-      const body = (await res.json()) as {
-        data?: TwitchModerator[];
-        pagination?: { cursor?: string };
-      };
+      const body = (await res.json()) as { data?: TwitchModerator[]; pagination?: { cursor?: string } };
       for (const m of body.data ?? []) {
         mods.push({ twitchId: m.user_id, login: m.user_login, displayName: m.user_name });
       }
@@ -730,7 +726,7 @@ export const listAuditLog = query({
     const limit = Math.max(1, Math.min(a.limit ?? 50, 200));
     return ctx.db
       .query("auditLog")
-      .withIndex("by_canvas_time", (q) => q.eq("canvasId", a.canvasId))
+      .withIndex("by_canvas_ts", (q) => q.eq("canvasId", a.canvasId))
       .order("desc")
       .take(limit);
   },

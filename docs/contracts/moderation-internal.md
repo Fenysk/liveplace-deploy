@@ -1,13 +1,27 @@
 # Moderation internal seam — Convex (F8/FEN-52) ↔ Gateway (FEN-19)
 
+> Companion to the **frozen schema + logic contract** `docs/contracts/moderation.md`
+> (FE sign-off 2026-06-02). That doc owns the tables, mutation signatures and the
+> restore model; **this** doc owns only the HTTP seam between Convex and the
+> gateway. The two must stay consistent.
+
 The F8 moderation **decision + journal** layer lives in Convex
-(`apps/convex/convex/moderation.ts`). It authorises a mod action, folds the
-durable placement log into the exact `{x,y,color}` cells to write, records the
-ban / overlay / audit, then asks the **gateway** to apply the Redis side-effects.
-Convex never touches Redis (G-A1). This file is the HTTP contract between the two
-sides. The gateway endpoints below are **owned by FEN-19** (out of scope for
-FEN-52); until they exist, the Convex actions record durable state and report the
-dispatch as `gateway_not_configured` (no throw), so the layer is deployable now.
+(`apps/convex/convex/moderation.ts`). It authorises a mod action, derives the
+exact `{x,y,color}` cells to write from the durable `placements` log
+(`by_canvas_cell`), records the ban / `pixelModeration` overlay / `auditLog`,
+then asks the **gateway** to apply the Redis side-effects. Convex never touches
+Redis (G-A1). The gateway endpoints below are **owned by FEN-19/Backend** (out of
+scope for FEN-52); until they exist, the Convex actions record durable state and
+report the dispatch as `gateway_not_configured` (no throw), so the layer is
+deployable now.
+
+> **Binding invariant (from the frozen contract, for FEN-19):** every cell
+> `moderate.lua` overwrites MUST be `XADD`-ed to `canvas:{id}:stream` with a
+> freshly-bumped `version` (same payload shape as `place.lua`: `x,y,color,version,by,ts`).
+> The flush worker then persists it into `placements`, so the durable log stays
+> resync-consistent and the derive-underneath logic keeps working. Echo the bumped
+> version back in the `/internal/moderate` response (`{ "version": N }`) and Convex
+> stamps it onto the `pixelModeration.overwriteVersion` of the action.
 
 ## Auth
 
@@ -31,7 +45,17 @@ already decided the colours (`0` = erase, otherwise the colour to (re)write).
 }
 ```
 
-Response `2xx` on success. Convex stamps the audit row with the status.
+Response `2xx`; echo `{ "version": N }` (the last bumped write counter) so Convex
+can stamp `pixelModeration.overwriteVersion`.
+
+## `POST /internal/ban`
+
+Push a ban/unban to the gateway so it (re)allows or rejects the user's live
+placements immediately. The durable source stays `bans` in Convex (`isBanned`).
+
+```jsonc
+{ "slug": "streamerlogin", "userId": "better-auth-id", "banned": false }
+```
 
 ## `POST /internal/flush`
 
@@ -58,12 +82,14 @@ checked by `place.lua`. Convex has already patched the durable mirror
 
 - **Authz**: owner (`canvases.ownerId`) or active `canvasModerators` row.
 - **Cell decision**: `lib/moderation.ts` folds `placements` (the FEN-47 append
-  log — author + colour + version) into the cell list. "What was underneath" is
-  the stack entry below the current top per cell. This log IS the `pixelEvents`
-  history FEN-10 named; it is not duplicated.
-- **Durable record**: `bans`, `pixelModeration` (CA2 deleted-pixel overlay,
-  kept invisible-but-recorded with author + reason), `auditLog` (CA6),
-  `canvasModerators` (Twitch sync, F8.5 via Helix `/moderation/moderators`).
+  log — author + colour + version) into the cell list via `by_canvas_cell`. "What
+  was underneath" is the most recent placement below the current top per cell
+  (skipping a wiped user's own stacked pixels). This log IS the per-placement
+  history FEN-10 named `pixelEvents`; it is not duplicated.
+- **Durable record**: `bans`, `pixelModeration` (CA2 overlay — `removedUserId` /
+  `removedColor` / `removedVersion` / `underneathColor` / `modActionId` /
+  `restored`, kept invisible-but-recorded), `auditLog` (CA6), `canvasModerators`
+  (Twitch sync, F8.5 via Helix `/moderation/moderators`, `source="twitch_sync"`).
 
 ## Placement gate
 

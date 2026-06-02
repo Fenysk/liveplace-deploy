@@ -1,22 +1,22 @@
 /**
- * Acceptance tests for the F8 pure moderation rules (FEN-52). Runs under Node's
- * built-in test runner with native TS type-stripping — no Convex runtime, no
- * dependency install:
+ * Acceptance tests for the F8 pure moderation rules (FEN-52), aligned to the
+ * frozen contract docs/contracts/moderation.md. Runs under Node's built-in test
+ * runner with native TS type-stripping — no Convex runtime:
  *
  *   node --test apps/convex/convex/lib/moderation.test.ts
  *
- * Covers the ban+wipe stack fold (top-of-stack ownership, reveal underneath,
- * skip painted-over / already-erased), unit + group delete, restore-from-history,
- * and deterministic row-major ordering.
+ * Covers the ban+wipe fold (skip a run of the banned user's own stacked pixels,
+ * reveal underneath, skip painted-over / already-erased), unit + group delete,
+ * the bulkDelta mapping, and deterministic row-major ordering.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  computeWipeCells,
-  computeDeleteCells,
-  computeRestoreCells,
+  planWipe,
+  planDelete,
+  removalCells,
   groupByCell,
-  sortCells,
+  sortPlans,
   type PlacementRow,
 } from "./moderation.ts";
 
@@ -29,63 +29,60 @@ const p = (x: number, y: number, color: number, version: number, userId?: string
   userId,
 });
 
-test("computeWipeCells: reveals the colour underneath the banned author's top pixel", () => {
-  // Cell (1,1): bob painted 5 over alice's 3 → wiping bob reveals 3.
+test("planWipe: reveals the colour underneath the banned author's top pixel", () => {
+  // (1,1): bob painted 5 over alice's 3 → wiping bob reveals 3.
   const log = [p(1, 1, 3, 10, "alice"), p(1, 1, 5, 20, "bob")];
-  assert.deepEqual(computeWipeCells(log, "bob"), [{ x: 1, y: 1, color: 3 }]);
+  assert.deepEqual(planWipe(log, "bob"), [
+    { x: 1, y: 1, removedUserId: "bob", removedColor: 5, removedVersion: 20, underneathColor: 3 },
+  ]);
 });
 
-test("computeWipeCells: erases (colour 0) when the banned pixel sits on bare canvas", () => {
-  const log = [p(2, 3, 7, 11, "bob")];
-  assert.deepEqual(computeWipeCells(log, "bob"), [{ x: 2, y: 3, color: 0 }]);
+test("planWipe: skips a run of the banned user's OWN stacked pixels", () => {
+  // bob placed twice (v20, v30) over alice's 3 → wiping bob reveals alice's 3.
+  const log = [p(1, 1, 3, 10, "alice"), p(1, 1, 4, 20, "bob"), p(1, 1, 5, 30, "bob")];
+  assert.deepEqual(planWipe(log, "bob"), [
+    { x: 1, y: 1, removedUserId: "bob", removedColor: 5, removedVersion: 30, underneathColor: 3 },
+  ]);
 });
 
-test("computeWipeCells: skips cells the banned user no longer tops", () => {
-  // bob placed first, alice painted over → bob is not on top, nothing to wipe.
-  const log = [p(0, 0, 4, 5, "bob"), p(0, 0, 6, 9, "alice")];
-  assert.deepEqual(computeWipeCells(log, "bob"), []);
+test("planWipe: erases (0) when only the banned user ever touched the cell", () => {
+  const log = [p(2, 3, 7, 11, "bob"), p(2, 3, 8, 12, "bob")];
+  assert.deepEqual(planWipe(log, "bob"), [
+    { x: 2, y: 3, removedUserId: "bob", removedColor: 8, removedVersion: 12, underneathColor: 0 },
+  ]);
 });
 
-test("computeWipeCells: skips an already-erased top (no visible pixel)", () => {
-  const log = [p(1, 0, 8, 5, "bob"), p(1, 0, 0, 7, "bob")];
-  assert.deepEqual(computeWipeCells(log, "bob"), []);
-});
-
-test("computeWipeCells: ignores anonymous and other users, handles unsorted input", () => {
+test("planWipe: skips cells the banned user no longer tops, and erased tops", () => {
   const log = [
-    p(5, 5, 2, 30, "bob"), // top at (5,5) is bob
-    p(5, 5, 1, 10, undefined), // anon underneath
-    p(9, 9, 3, 40, "carol"), // carol's, untouched
+    p(0, 0, 4, 5, "bob"),
+    p(0, 0, 6, 9, "alice"), // alice on top now
+    p(1, 0, 8, 5, "bob"),
+    p(1, 0, 0, 7, "bob"), // bob erased their own → nothing visible
   ];
-  assert.deepEqual(computeWipeCells(log, "bob"), [{ x: 5, y: 5, color: 1 }]);
+  assert.deepEqual(planWipe(log, "bob"), []);
 });
 
-test("computeDeleteCells: unit + group reveal underneath, de-dupe, missing cell → 0", () => {
+test("planDelete: unit + group reveal immediately-previous, de-dupe, skip empty/missing", () => {
   const log = [
     p(1, 1, 3, 10, "alice"),
     p(1, 1, 5, 20, "bob"),
     p(2, 2, 9, 15, "carol"),
   ];
-  const out = computeDeleteCells(log, [
+  const out = planDelete(log, [
     { x: 1, y: 1 },
     { x: 2, y: 2 },
     { x: 1, y: 1 }, // duplicate ignored
-    { x: 7, y: 7 }, // no history → erase
+    { x: 7, y: 7 }, // no history → skipped
   ]);
   assert.deepEqual(out, [
-    { x: 1, y: 1, color: 3 },
-    { x: 2, y: 2, color: 0 },
-    { x: 7, y: 7, color: 0 },
+    { x: 1, y: 1, removedUserId: "bob", removedColor: 5, removedVersion: 20, underneathColor: 3 },
+    { x: 2, y: 2, removedUserId: "carol", removedColor: 9, removedVersion: 15, underneathColor: 0 },
   ]);
 });
 
-test("computeRestoreCells: rebuilds cells from the durable top-of-stack", () => {
+test("removalCells: maps plans onto bulkDelta cells writing the underneath colour", () => {
   const log = [p(1, 1, 3, 10, "alice"), p(1, 1, 5, 20, "bob")];
-  // Restore re-asserts what history says is on top (bob's 5), undoing a wipe.
-  assert.deepEqual(computeRestoreCells(log, [{ x: 1, y: 1 }, { x: 4, y: 4 }]), [
-    { x: 1, y: 1, color: 5 },
-    { x: 4, y: 4, color: 0 },
-  ]);
+  assert.deepEqual(removalCells(planWipe(log, "bob")), [{ x: 1, y: 1, color: 3 }]);
 });
 
 test("groupByCell: sorts each cell's stack ascending by version", () => {
@@ -96,15 +93,15 @@ test("groupByCell: sorts each cell's stack ascending by version", () => {
   );
 });
 
-test("sortCells: deterministic row-major (y then x)", () => {
-  const out = sortCells([
-    { x: 2, y: 1, color: 1 },
-    { x: 1, y: 1, color: 1 },
-    { x: 0, y: 0, color: 1 },
+test("sortPlans: deterministic row-major (y then x)", () => {
+  const out = sortPlans([
+    { x: 2, y: 1 },
+    { x: 1, y: 1 },
+    { x: 0, y: 0 },
   ]);
   assert.deepEqual(out, [
-    { x: 0, y: 0, color: 1 },
-    { x: 1, y: 1, color: 1 },
-    { x: 2, y: 1, color: 1 },
+    { x: 0, y: 0 },
+    { x: 1, y: 1 },
+    { x: 2, y: 1 },
   ]);
 });

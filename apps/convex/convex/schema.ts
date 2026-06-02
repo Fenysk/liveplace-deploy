@@ -162,7 +162,11 @@ export default defineSchema({
     ts: v.number(),
   })
     .index("by_canvas_version", ["canvasId", "version"]) // dedup + restore tail (gt)
-    .index("by_user", ["userId"]), // cross-canvas audit
+    .index("by_user", ["userId"]) // cross-canvas audit
+    // F8 (FEN-52, FE-ratified additive index): ordered per-cell history so a
+    // moderation action can read "what was underneath" — most recent placement
+    // at (canvasId,x,y) descending by version. See docs/contracts/moderation.md.
+    .index("by_canvas_cell", ["canvasId", "x", "y", "version"]),
 
   /**
    * Periodic binary palette-indexed snapshots (the durable canvas source of
@@ -192,21 +196,20 @@ export default defineSchema({
   }).index("by_canvas", ["canvasId"]),
 
   // ───────────────────────────────────────────────────────────────────────────
-  // F8 moderation suite (FEN-52). Additive tables; the schema header pre-blesses
-  // `pixelEvents` and additive growth, but per F2's freeze these still need FE
-  // sign-off (coordinated on FEN-52). FEN-10 named four tables; the per-placement
-  // event log it called `pixelEvents` already exists as `placements` (FEN-47,
-  // author + colour + version), so moderation DERIVES "what was underneath" by
-  // folding that log (lib/moderation.ts) rather than duplicating it. What was
-  // genuinely missing — ban list, moderator roster, the deleted-pixel overlay
-  // (CA2), and the audit trail (CA6) — is added below.
+  // F8 moderation suite (FEN-52) — frozen by docs/contracts/moderation.md
+  // (FE sign-off 2026-06-02, commit 395b6fb in the FE tree). Net delta: 3
+  // additive tables below + the additive `placements.by_canvas_cell` index above.
+  // The earlier draft `pixelEvents` table is dropped: "what was underneath" is
+  // derived from the existing `placements` log (FEN-47) via `by_canvas_cell`,
+  // with no second append log and no flush-path dual-write. Field names match the
+  // frozen contract so the two divergent trees agree pending ADR-0004.
   // ───────────────────────────────────────────────────────────────────────────
 
   /**
-   * Active/lifted bans of an author on a canvas (F8.1). A ban gates whether the
-   * gateway accepts the user's placements and records who/why (CA6 audit pairs
-   * with `auditLog`). `active === false` is a lifted ban kept for history. The
-   * wipe of their pixels is a separate dispatched action, flagged by `wiped`.
+   * Active + historical bans of an author on a canvas (F8.1). Unban keeps the
+   * row (`active === false`, `liftedAt`/`liftedBy`); it is the durable source the
+   * gateway enforces (a `banned` WS error). The pixel wipe is a separate bulkDelta
+   * recorded in `pixelModeration` + `auditLog`.
    */
   bans: defineTable({
     canvasId: v.id("canvases"),
@@ -214,7 +217,6 @@ export default defineSchema({
     bannedBy: v.string(), // moderator/owner who issued it
     reason: v.optional(v.string()),
     active: v.boolean(),
-    wiped: v.boolean(), // true once their pixels were wiped (F8.1)
     createdAt: v.number(),
     liftedAt: v.optional(v.number()),
     liftedBy: v.optional(v.string()),
@@ -224,10 +226,10 @@ export default defineSchema({
 
   /**
    * Moderator roster per canvas (F8.5). The owner is always implicitly a mod
-   * (checked separately against `canvases.ownerId`); this table holds the
-   * delegated mods. `source` distinguishes the Twitch channel-mod sync (CA5,
-   * populated with no owner action) from any future manual grants. `twitchId`
-   * is kept so a re-sync can reconcile by stable Twitch id across renames.
+   * (checked separately against `canvases.ownerId`); this holds delegated mods.
+   * `source === "twitch_sync"` rows are auto-reconciled from the Twitch channel
+   * mod list (CA5, no owner action); `source === "manual"` are owner-granted and
+   * never touched by sync. `twitchId` is the stable re-sync key across renames.
    */
   canvasModerators: defineTable({
     canvasId: v.id("canvases"),
@@ -235,7 +237,7 @@ export default defineSchema({
     twitchId: v.string(), // stable Twitch numeric id (sync key)
     login: v.optional(v.string()),
     displayName: v.optional(v.string()),
-    source: v.union(v.literal("twitch"), v.literal("manual")),
+    source: v.union(v.literal("twitch_sync"), v.literal("manual")),
     active: v.boolean(),
     syncedAt: v.number(),
   })
@@ -244,41 +246,42 @@ export default defineSchema({
     .index("by_canvas_active", ["canvasId", "active"]),
 
   /**
-   * Deleted-pixel overlay (CA2): keep moderated pixels invisible on the canvas
-   * but recorded in-base with author + reason. One row per moderated cell,
-   * upserted by canvas+cell. `deleted === true` means the cell was wiped/deleted
-   * (the live bitmap shows `revealedColor`, what was underneath); a later restore
-   * flips it to `false`. `removedColor`/`removedUserId` capture what was taken
-   * down so the action is fully auditable and reversible.
+   * Overlay of moderator-removed pixels (CA2): keeps the removed pixel (author +
+   * colour + reason) invisible on the canvas but recorded in-base, with restore
+   * linkage (F8.3). One row per (cell, removal). The live bitmap shows
+   * `underneathColor`; `modActionId` points at the `auditLog` row that removed it,
+   * so a one-shot restore re-applies `removedColor` for every cell an action
+   * touched (`by_modAction`). `restored` flips true on restore.
    */
   pixelModeration: defineTable({
     canvasId: v.id("canvases"),
     x: v.number(),
     y: v.number(),
-    deleted: v.boolean(),
-    removedColor: v.number(), // the colour that was taken down
     removedUserId: v.optional(v.string()), // author of the removed pixel
-    revealedColor: v.number(), // colour written underneath (0 = erased)
+    removedColor: v.number(), // colour taken down (re-applied on restore)
+    removedVersion: v.number(), // version of the removed placement
+    underneathColor: v.number(), // colour now shown (0 = erased)
+    modActionId: v.id("auditLog"), // the auditLog row that removed it
+    overwriteVersion: v.optional(v.number()), // bumped version moderate.lua stamped
     reason: v.optional(v.string()),
-    actorUserId: v.string(), // moderator/owner who acted
-    atVersion: v.number(), // write sequence at action time
-    updatedAt: v.number(),
+    restored: v.boolean(),
+    restoredActionId: v.optional(v.id("auditLog")), // auditLog row that restored it
+    createdAt: v.number(),
   })
-    .index("by_canvas_cell", ["canvasId", "x", "y"]) // upsert + restore lookup
-    .index("by_canvas_deleted", ["canvasId", "deleted"]), // list currently-hidden
+    .index("by_canvas_cell", ["canvasId", "x", "y"]) // CA2 lookup, list-by-cell
+    .index("by_modAction", ["modActionId"]) // one-shot restore of an action
+    .index("by_canvas_removedUser", ["canvasId", "removedUserId"]), // per-author audit
 
   /**
-   * Audit trail of every moderation action (CA6). Append-only; one row per
-   * dispatched action (ban, wipe, delete, restore, freeze, unfreeze, mod sync).
-   * `cellsAffected` is the size of the dispatched bulkDelta; `targetUserId` is
-   * the moderated author when the action targets one.
+   * Append-only journal — one row per moderator action (CA6). Per-cell detail is
+   * linked from `pixelModeration.modActionId`. `cellsAffected` is the dispatched
+   * bulkDelta size; `targetUserId` is the moderated author when applicable.
    */
   auditLog: defineTable({
     canvasId: v.id("canvases"),
     action: v.union(
-      v.literal("ban"),
+      v.literal("ban_wipe"),
       v.literal("unban"),
-      v.literal("wipe"),
       v.literal("delete"),
       v.literal("restore"),
       v.literal("freeze"),
@@ -289,7 +292,9 @@ export default defineSchema({
     targetUserId: v.optional(v.string()), // moderated author, when applicable
     cellsAffected: v.number(),
     reason: v.optional(v.string()),
-    detail: v.optional(v.string()), // free-form context (e.g. dispatch result)
+    detail: v.optional(v.string()), // free-form context (e.g. sync diff, dispatch)
     createdAt: v.number(),
-  }).index("by_canvas_time", ["canvasId", "createdAt"]), // newest-first per canvas
+  })
+    .index("by_canvas_ts", ["canvasId", "createdAt"]) // newest-first per canvas
+    .index("by_actor", ["actorUserId"]), // per-moderator audit
 });
