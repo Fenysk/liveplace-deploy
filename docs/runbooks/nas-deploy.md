@@ -6,7 +6,7 @@ login → live pixel. Everything here is scripted/turnkey; the only inputs a hum
 must supply are a Twitch app and a Docker host (see "Prerequisites").
 
 > Static pre-flight done by the Founding Engineer (no Docker needed): code is
-> green (`pnpm -r build && pnpm -r typecheck && pnpm --filter @liveplace/protocol
+> green (`pnpm -r build && pnpm -r typecheck && pnpm --filter @canvas/protocol
 > test`), `docker-compose.yml` parses and its healthchecks are image-correct, and
 > the WS live-pixel smoke (`scripts/smoke.mjs`) was validated against a faithful
 > protocol emulation. What remains genuinely needs a Docker host + Twitch creds.
@@ -99,7 +99,7 @@ node scripts/smoke.mjs
 ```
 
 **Anonymous (no Twitch needed — quick stack check):** bring the stack up with
-`GATEWAY_REQUIRE_AUTH=false` in `.env`, then from the NAS host:
+`GATEWAY_AUTH_DISABLED=1` in `.env`, then from the NAS host:
 ```bash
 node scripts/smoke.mjs        # defaults to localhost:3000 / localhost:8080
 ```
@@ -114,7 +114,7 @@ Expect `✅ SMOKE PASSED`. Attach the script output to the ticket.
 | `convex-backend` never `healthy` → `web` won't start | Probe is `curl -f /version`. Check `docker compose logs convex-backend`; ensure `CONVEX_INSTANCE_SECRET` is set. |
 | Twitch callback `redirect_mismatch` | Twitch console Redirect URL ≠ `${BETTER_AUTH_URL}/api/auth/callback/twitch`. |
 | Browser can't reach `wss://.../ws` | Caddy routes `/ws*` → gateway:8080 (see `infra/Caddyfile`); confirm `PUBLIC_WS_URL` uses `wss://` and the `/ws` path. |
-| smoke: `unauthenticated` | Gateway requires a ticket; pass `TICKET=` or set `GATEWAY_REQUIRE_AUTH=false`. |
+| smoke: `unauthenticated` | Gateway requires a token; pass `TICKET=<jwt>` (appended as `?token=`) or set `GATEWAY_AUTH_DISABLED=1`. |
 | TLS fails on a LAN-only NAS | Uncomment `tls internal` in `infra/Caddyfile` and use a non-public hostname. |
 
 ## What to paste back into FEN-25
