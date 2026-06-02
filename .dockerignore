@@ -2,9 +2,15 @@ node_modules
 **/node_modules
 **/dist
 .git
+# Never bake env files into an image — at the root OR nested (e.g.
+# apps/convex/.env.local, which carries a CONVEX_DEPLOYMENT that breaks the
+# self-hosted deploy — FEN-78 #3). The `**/` globs cover every subdirectory.
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 *.log
 data
 redis-data

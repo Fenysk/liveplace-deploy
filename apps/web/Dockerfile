@@ -8,11 +8,11 @@
 # VITE_* are inlined at BUILD time, so the public Convex URLs must be passed as
 # build args (they are public origins, not secrets).
 #
-# NOTE (upstream dependency): `tsc`/`vite build` and the `convex codegen` step
-# below require apps/convex to be codegen-clean. Today `convex codegen` fails on
-# a better-auth/kysely export mismatch (a Full-stack / apps/convex concern, not
-# infra). Until that resolves, this image build is blocked — tracked for FEN-58.
-FROM node:22-alpine AS base
+# Base image note (FEN-78 #1): the `convex codegen` step below runs the Convex
+# native binary, which is glibc-only and crashes on Alpine/musl. So the BUILD
+# stage uses a glibc base (node:22-bookworm-slim); tsc/vite build there too. The
+# runtime stage stays on alpine — it only serves static files, no Convex binary.
+FROM node:22-bookworm-slim AS base
 RUN corepack enable
 WORKDIR /app
 

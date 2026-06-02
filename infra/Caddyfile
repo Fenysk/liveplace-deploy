@@ -1,8 +1,16 @@
-# Twitch Canvas reverse proxy + automatic TLS (D4/D5, owned by DevOps).
+# Twitch Canvas reverse proxy (D4/D5, owned by DevOps).
 #
-# Set SITE_HOST in .env to your NAS hostname. Caddy provisions TLS automatically
-# (Let's Encrypt for a public name). For a LAN-only NAS with no public DNS,
-# uncomment `tls internal` to use Caddy's self-signed CA instead.
+# The site ADDRESS is driven by $SITE_ADDRESS and decides the scheme/port:
+#   - default `:80`   -> HTTP-only on port 80, accepts ALL hostnames. This is the
+#                        reliable local / behind-a-proxy / behind-a-tunnel mode.
+#                        A bare host like `localhost` is NOT enough: Caddy would
+#                        bind 443 and redirect :80 -> :443, so plain HTTP fails
+#                        (FEN-78 #4). `:80` forces a real HTTP listener.
+#   - `canvas.example.com` (a bare public host) -> Caddy auto-provisions TLS
+#                        (Let's Encrypt) and serves HTTPS on 443.
+#   - `https://nas.local` + `tls internal` below -> LAN HTTPS with a self-signed CA.
+# Set it in .env: SITE_ADDRESS. The host port the proxy binds is separate and is
+# configured by PROXY_HTTP_PORT / PROXY_HTTPS_PORT in docker-compose.yml.
 #
 # Routing model (canonical _default — web is a pure SPA, auth lives in Convex):
 #   /ws*        -> gateway   (WebSocket, ADR-0003)
@@ -14,8 +22,8 @@
 #
 # The convex backend serves both origins at their own roots, so we strip the
 # public path prefixes with `handle_path` before proxying upstream.
-{$SITE_HOST:localhost} {
-	# tls internal   # uncomment for a LAN-only NAS (self-signed CA)
+{$SITE_ADDRESS::80} {
+	# tls internal   # uncomment for a LAN-only NAS over HTTPS (self-signed CA)
 
 	encode gzip zstd
 

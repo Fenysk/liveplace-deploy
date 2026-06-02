@@ -9,10 +9,10 @@
 # Self-hosted deploy reads CONVEX_SELF_HOSTED_URL + CONVEX_SELF_HOSTED_ADMIN_KEY
 # from the environment (provided via .env / Docker secrets — never baked in).
 #
-# NOTE (upstream dependency): `convex deploy` currently fails on a
-# better-auth/kysely export mismatch (apps/convex / Full-stack concern). Until
-# that resolves this one-shot will error and hold the dependent services back.
-FROM node:22-alpine AS base
+# Base image (FEN-78 #1): `convex deploy` runs the Convex native binary, which is
+# glibc-only and crashes on Alpine/musl. Use a glibc base so this one-shot runs
+# on a clean Docker host without manual intervention.
+FROM node:22-bookworm-slim AS base
 RUN corepack enable
 WORKDIR /app
 
