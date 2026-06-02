@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@canvas/i18n": "workspace:*",
+    "@canvas/protocol": "workspace:*",
     "@convex-dev/better-auth": "0.12.2",
     "better-auth": "1.6.13",
     "convex": "^1.39.1",

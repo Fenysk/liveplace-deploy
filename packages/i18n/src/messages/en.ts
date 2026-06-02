@@ -36,6 +36,15 @@ export const en = {
   "canvas.erase": "Erase",
   "canvas.gauge": "{current}/{max} pixels",
 
+  // Canvas placement feedback (F4) — optimistic pose/erase rollback (FEN-60)
+  "canvas.feedback.cooldown": "On cooldown — next pixel in {seconds}s",
+  "canvas.feedback.banned": "You are banned from this canvas",
+  "canvas.feedback.outOfBounds": "That pixel is off the canvas",
+  "canvas.feedback.invalidColor": "Pick a colour from the palette",
+  "canvas.feedback.rateLimited": "Slow down — try again in a moment",
+  "canvas.feedback.signInRequired": "Sign in with Twitch to place pixels",
+  "canvas.feedback.error": "Couldn't place that pixel — try again",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profile not found",
   "profile.memberSince": "Member since {date}",

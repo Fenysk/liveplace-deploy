@@ -67,6 +67,9 @@ importers:
       '@canvas/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@canvas/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@convex-dev/better-auth':
         specifier: 0.12.2
         version: 0.12.2(@standard-schema/spec@1.1.0)(better-auth@1.6.13(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(convex@1.39.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)

@@ -32,6 +32,15 @@ export const fr: Catalog = {
   "canvas.erase": "Gommer",
   "canvas.gauge": "{current}/{max} pixels",
 
+  // Retour de pose sur la toile (F4) — pose/gomme optimiste + rollback (FEN-60)
+  "canvas.feedback.cooldown": "En attente — prochain pixel dans {seconds}s",
+  "canvas.feedback.banned": "Tu es banni de cette toile",
+  "canvas.feedback.outOfBounds": "Ce pixel est hors de la toile",
+  "canvas.feedback.invalidColor": "Choisis une couleur de la palette",
+  "canvas.feedback.rateLimited": "Doucement — réessaie dans un instant",
+  "canvas.feedback.signInRequired": "Connecte-toi avec Twitch pour poser des pixels",
+  "canvas.feedback.error": "Impossible de poser ce pixel — réessaie",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profil introuvable",
   "profile.memberSince": "Membre depuis {date}",
