@@ -55,10 +55,28 @@ export default defineSchema({
      * Additive F2 extension to §6.2.
      */
     cellCount: v.number(),
+    /**
+     * Public-gallery discovery fields (F12 / FEN-23). All OFF the hot path
+     * (G-A1) and maintained by the persistence worker / gateway, NOT on pixel
+     * placement — see docs/contracts/gallery-read.md.
+     *
+     * `lastActivityAt`: epoch ms of the most recent placement; set to `createdAt`
+     * on creation so the activity sort is always well-defined, then advanced by
+     * the flush worker. `viewerCount`: current live viewers, periodically flushed
+     * by the gateway. `thumbnailStorageId` / `thumbnailVersion`: pointer to the
+     * latest pre-rendered preview blob (the gallery never renders one on the fly,
+     * G-Perf3); the worker re-renders it from a snapshot off the hot path.
+     */
+    lastActivityAt: v.optional(v.number()),
+    viewerCount: v.optional(v.number()),
+    thumbnailStorageId: v.optional(v.id("_storage")),
+    thumbnailVersion: v.optional(v.number()),
   })
     .index("by_owner_status", ["ownerId", "status"])
     .index("by_slug", ["slug"])
-    .index("by_public_status", ["isPublic", "status"]),
+    .index("by_public_status", ["isPublic", "status"])
+    // F12 gallery: list public+active canvases ordered by activity, paginated.
+    .index("by_public_activity", ["isPublic", "status", "lastActivityAt"]),
 
   /**
    * Application-side projection of an authenticated user (FEN-11 / §F1).

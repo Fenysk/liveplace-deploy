@@ -44,6 +44,11 @@ export const fr: Catalog = {
   "profile.rank": "n°{rank}",
   "profile.empty": "Aucune toile rejointe pour l'instant.",
 
+  // Galerie publique (F12) — consommée par GalleryPage / galleryView
+  "gallery.title": "Découvrir les toiles",
+  "gallery.viewers": "{count} spectateurs",
+  "gallery.empty": "Aucune toile publique en direct pour le moment.",
+
   // Generic
   "common.loading": "Chargement…",
   "common.error": "Une erreur est survenue",

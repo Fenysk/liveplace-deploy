@@ -48,6 +48,11 @@ export const en = {
   "profile.rank": "#{rank}",
   "profile.empty": "No canvases joined yet.",
 
+  // Public gallery (F12) — consumed by GalleryPage / galleryView
+  "gallery.title": "Discover canvases",
+  "gallery.viewers": "{count} watching",
+  "gallery.empty": "No public canvases live right now.",
+
   // Generic
   "common.loading": "Loading…",
   "common.error": "Something went wrong",

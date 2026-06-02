@@ -180,6 +180,10 @@ export const createCanvas = mutation({
       archivedAt: null,
       lastSnapshotAt: null,
       cellCount: 0,
+      // Gallery (F12): seed activity to creation time so a brand-new public
+      // canvas already sorts; the worker advances these off the hot path.
+      lastActivityAt: now,
+      viewerCount: 0,
     });
   },
 });
