@@ -15,14 +15,16 @@ const REDIS_URL = process.env.REDIS_URL;
 test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }, async (t) => {
   const {
     MODERATE_LUA, moderateArgs, parseModerateResult,
-    CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY, DELTA_CHANNEL,
+    canvasKeys, DELTA_CHANNEL,
   } = await import("../src/index.ts");
   const { default: Redis } = await import("ioredis");
 
   const redis = new Redis(REDIS_URL!);
   const sub = new Redis(REDIS_URL!);
   const W = 16, H = 16;
-  const keysToClear = [CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY];
+  const canvasId = `mod-${process.pid}`;
+  const K = canvasKeys(canvasId);
+  const keysToClear = [K.pixels, K.meta];
 
   t.after(async () => {
     await redis.del(...keysToClear);
@@ -37,26 +39,26 @@ test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }
   await sub.subscribe(DELTA_CHANNEL);
 
   // Seed two coloured cells via raw SETRANGE (stand-in for prior placements).
-  await redis.setrange(CANVAS_BITMAP_KEY, 2 * W + 1, String.fromCharCode(5));
-  await redis.setrange(CANVAS_BITMAP_KEY, 4 * W + 3, String.fromCharCode(9));
+  await redis.setrange(K.pixels, 2 * W + 1, String.fromCharCode(5));
+  await redis.setrange(K.pixels, 4 * W + 3, String.fromCharCode(9));
 
   // Ban+wipe: overwrite both to white (0). One atomic call → two fanned writes.
   const cells = [
     { x: 1, y: 2, color: 0 },
     { x: 3, y: 4, color: 0 },
   ];
-  const { keys, argv } = moderateArgs({ width: W, height: H, paletteSize: 32, cells, deltaChannel: DELTA_CHANNEL });
+  const { keys, argv } = moderateArgs({ width: W, height: H, paletteSize: 32, canvasId, cells, deltaChannel: DELTA_CHANNEL });
   const res = parseModerateResult(await redis.eval(MODERATE_LUA, keys.length, ...keys, ...argv));
 
   assert.equal(res.applied, 2);
 
   // Bitmap reflects the wipe.
-  const bitmap = (await redis.getBuffer(CANVAS_BITMAP_KEY))!;
+  const bitmap = (await redis.getBuffer(K.pixels))!;
   assert.equal(bitmap[2 * W + 1], 0);
   assert.equal(bitmap[4 * W + 3], 0);
 
-  // Write counter advanced once per cell; lastSeq matches it.
-  const counter = Number(await redis.get(CANVAS_WRITE_COUNTER_KEY));
+  // Version counter advanced once per cell; lastSeq matches it.
+  const counter = Number(await redis.get(K.meta));
   assert.equal(counter, 2);
   assert.equal(res.lastSeq, 2);
 
@@ -70,27 +72,29 @@ test("moderate.lua bulk overwrite + fan-out (F8.1–F8.3)", { skip: !REDIS_URL }
   // Restore (F8.3) is the same engine with the previous colours: put cell (1,2)
   // back to 5. applied counts it; the wipe of an out-of-bounds cell is skipped.
   const restore = moderateArgs({
-    width: W, height: H, paletteSize: 32, deltaChannel: "",
+    width: W, height: H, paletteSize: 32, canvasId, deltaChannel: "",
     cells: [{ x: 1, y: 2, color: 5 }, { x: 999, y: 999, color: 1 }],
   });
   const r2 = parseModerateResult(await redis.eval(MODERATE_LUA, restore.keys.length, ...restore.keys, ...restore.argv));
   assert.equal(r2.applied, 1); // out-of-bounds cell skipped
-  const bitmap2 = (await redis.getBuffer(CANVAS_BITMAP_KEY))!;
+  const bitmap2 = (await redis.getBuffer(K.pixels))!;
   assert.equal(bitmap2[2 * W + 1], 5);
 });
 
 test("place.lua honours the emergency freeze flag (F8.4 / CA4)", { skip: !REDIS_URL }, async (t) => {
   const {
     PLACE_LUA, placeArgs, parsePlaceResult,
-    CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY, CANVAS_FROZEN_KEY, userGaugeKey, DEFAULT_GAUGE,
+    canvasKeys, userGaugeKey, DEFAULT_GAUGE,
   } = await import("../src/index.ts");
   const { default: Redis } = await import("ioredis");
 
   const redis = new Redis(REDIS_URL!);
   const userId = `freeze-${process.pid}`;
+  const canvasId = `frz-${process.pid}`;
+  const K = canvasKeys(canvasId);
   const W = 16, H = 16;
   const P = { ...DEFAULT_GAUGE, refillIntervalMs: 1000, gaugeMax: 3 };
-  const keysToClear = [CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY, CANVAS_FROZEN_KEY, userGaugeKey(userId)];
+  const keysToClear = [K.pixels, K.meta, K.stream, K.frozen, userGaugeKey(userId)];
 
   t.after(async () => {
     await redis.del(...keysToClear);
@@ -101,7 +105,7 @@ test("place.lua honours the emergency freeze flag (F8.4 / CA4)", { skip: !REDIS_
   const place = async () => {
     const { keys, argv } = placeArgs({
       x: 0, y: 0, width: W, height: H, color: 5, paletteSize: 32, nowMs: 1_000,
-      gauge: P, userId, deltaChannel: "",
+      gauge: P, userId, canvasId, deltaChannel: "",
     });
     return parsePlaceResult(await redis.eval(PLACE_LUA, keys.length, ...keys, ...argv));
   };
@@ -110,13 +114,13 @@ test("place.lua honours the emergency freeze flag (F8.4 / CA4)", { skip: !REDIS_
   assert.equal((await place()).status, "ok");
 
   // Freeze (one SET) → next placement is rejected instantly, no charge touched.
-  await redis.set(CANVAS_FROZEN_KEY, "1");
+  await redis.set(K.frozen, "1");
   const frozen = await place();
   assert.equal(frozen.status, "frozen");
-  // The write counter did not advance for the frozen attempt (only the first ok).
-  assert.equal(Number(await redis.get(CANVAS_WRITE_COUNTER_KEY)), 1);
+  // The version counter did not advance for the frozen attempt (only the first ok).
+  assert.equal(Number(await redis.get(K.meta)), 1);
 
   // Unfreeze (one DEL) → placement reopens instantly.
-  await redis.del(CANVAS_FROZEN_KEY);
+  await redis.del(K.frozen);
   assert.equal((await place()).status, "ok");
 });

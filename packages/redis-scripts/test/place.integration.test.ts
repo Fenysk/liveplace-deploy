@@ -20,18 +20,20 @@ const REDIS_URL = process.env.REDIS_URL;
 test("place.lua + refill-peek.lua against live Redis", { skip: !REDIS_URL }, async (t) => {
   const {
     PLACE_LUA, REFILL_PEEK_LUA, placeArgs, peekArgs,
-    parsePlaceResult, parsePeekResult,
-    CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY, userGaugeKey, DEFAULT_GAUGE,
+    parsePlaceResult, parsePeekResult, parseStreamRecord,
+    canvasKeys, userGaugeKey, DEFAULT_GAUGE,
   } = await import("../src/index.ts");
   const { default: Redis } = await import("ioredis");
 
   const redis = new Redis(REDIS_URL!);
   const userId = `test-${process.pid}`;
+  const canvasId = `it-${process.pid}`;
+  const K = canvasKeys(canvasId);
   const W = 16, H = 16;
   // gaugeMax here is the EFFECTIVE max the gateway passes (base + bonus). This
   // user has no bonus, so it is the base (3).
   const P = { ...DEFAULT_GAUGE, refillIntervalMs: 1000, gaugeMax: 3 };
-  const keysToClear = [CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY, userGaugeKey(userId)];
+  const keysToClear = [K.pixels, K.meta, K.stream, userGaugeKey(userId)];
 
   t.after(async () => {
     await redis.del(...keysToClear);
@@ -42,7 +44,7 @@ test("place.lua + refill-peek.lua against live Redis", { skip: !REDIS_URL }, asy
   const place = async (x: number, y: number, color: number, nowMs: number) => {
     const { keys, argv } = placeArgs({
       x, y, width: W, height: H, color, paletteSize: 32, nowMs,
-      gauge: P, userId, deltaChannel: "",
+      gauge: P, userId, canvasId, deltaChannel: "",
     });
     return parsePlaceResult(await redis.eval(PLACE_LUA, keys.length, ...keys, ...argv));
   };
@@ -59,10 +61,18 @@ test("place.lua + refill-peek.lua against live Redis", { skip: !REDIS_URL }, asy
   assert.equal(r.charges, 2);
   assert.equal(r.max, 3);
 
-  // Pixel actually written at the row-major offset; write counter incremented.
-  const bitmap = (await redis.getBuffer(CANVAS_BITMAP_KEY))!;
+  // Pixel actually written at the row-major offset; version (meta) incremented.
+  const bitmap = (await redis.getBuffer(K.pixels))!;
   assert.equal(bitmap[2 * W + 1], 5);
-  assert.equal(Number(await redis.get(CANVAS_WRITE_COUNTER_KEY)), 1);
+  assert.equal(Number(await redis.get(K.meta)), 1);
+
+  // R2 (FEN-54): the accepted placement is XADDed to the durable stream as a full
+  // {x,y,color,version,userId,ts} record — what the persistence worker drains.
+  const entries = (await redis.xrange(K.stream, "-", "+")) as [string, string[]][];
+  assert.equal(entries.length, 1);
+  assert.deepEqual(parseStreamRecord(entries[0]![1]), {
+    x: 1, y: 2, color: 5, version: 1, userId, ts: t0,
+  });
 
   // Drain the gauge.
   assert.equal((await place(0, 0, 5, t0)).charges, 1);
@@ -95,7 +105,7 @@ test("place.lua + refill-peek.lua against live Redis", { skip: !REDIS_URL }, asy
   const placeUpgraded = async (nowMs: number) => {
     const { keys, argv } = placeArgs({
       x: 0, y: 0, width: W, height: H, color: 5, paletteSize: 32, nowMs,
-      gauge: withBonus, userId: upgraded, deltaChannel: "",
+      gauge: withBonus, userId: upgraded, canvasId, deltaChannel: "",
     });
     return parsePlaceResult(await redis.eval(PLACE_LUA, keys.length, ...keys, ...argv));
   };

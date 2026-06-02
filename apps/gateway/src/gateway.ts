@@ -23,7 +23,7 @@ import {
   type PixelWrite,
   type ServerMessage,
 } from "@canvas/protocol";
-import { DELTA_CHANNEL } from "@canvas/redis-scripts";
+import { DELTA_CHANNEL, DEFAULT_CANVAS_ID } from "@canvas/redis-scripts";
 import { parseDeltaMessage } from "./schema";
 import type { GatewayConfig } from "./config";
 import { createAuthenticator, AuthError, type AuthedUser, type SocketAuthenticator } from "./auth";
@@ -299,9 +299,12 @@ export class Gateway {
     // Resolve the durable F6 bonus for this session (FEN-27 #1). It starts at the
     // base max and lifts to base+bonus once Convex answers; a transient failure
     // just leaves the user at base for this session (logged, never fatal).
-    void gauge.refresh().catch((err) => {
-      console.warn(`[gateway] gauge bonus resolve failed for ${user.userId}: ${(err as Error).message}`);
-    });
+    // Anonymous viewers never place, so there is nothing to resolve — skip it.
+    if (user.userId !== null) {
+      void gauge.refresh().catch((err) => {
+        console.warn(`[gateway] gauge bonus resolve failed for ${user.userId}: ${(err as Error).message}`);
+      });
+    }
 
     ws.on("pong", () => {
       conn.isAlive = true;
@@ -323,7 +326,7 @@ export class Gateway {
   /** welcome → snapshot → current viewer count. */
   private async sendInitialState(conn: Connection): Promise<void> {
     try {
-      const snap = await readCanvasSnapshot(this.redis.cmd, this.cfg.width, this.cfg.height);
+      const snap = await readCanvasSnapshot(this.redis.cmd, this.cfg.canvasId ?? DEFAULT_CANVAS_ID, this.cfg.width, this.cfg.height);
       conn.sendJson({
         t: "welcome",
         protocolVersion: PROTOCOL_VERSION,
@@ -359,6 +362,17 @@ export class Gateway {
         await this.handleResync(conn, msg.seq);
         return;
       case "place":
+        // Read-only enforcement (CA5): an anonymous visitor (no JWT at upgrade)
+        // may watch the canvas but never write. Reject before the placement path.
+        if (conn.user.userId === null) {
+          conn.sendJson({
+            t: "error",
+            code: "unauthenticated",
+            message: "sign in to place pixels",
+            seq: msg.seq,
+          });
+          return;
+        }
         await this.placement.handlePlace(conn, msg);
         return;
       default:
@@ -379,7 +393,7 @@ export class Gateway {
     // Too far behind (or landed on a fresh instance): full snapshot.
     conn.sendJson({ t: "resyncRequired" });
     try {
-      const snap = await readCanvasSnapshot(this.redis.cmd, this.cfg.width, this.cfg.height);
+      const snap = await readCanvasSnapshot(this.redis.cmd, this.cfg.canvasId ?? DEFAULT_CANVAS_ID, this.cfg.width, this.cfg.height);
       conn.sendBinary(Buffer.from(encodeSnapshot(snap.pixels, snap.seq, this.cfg.width, this.cfg.height)));
     } catch (err) {
       conn.sendJson({ t: "error", code: "internal", message: "resync snapshot failed" });

@@ -4,7 +4,7 @@
  * mode), plus the snapshot read and presence helpers.
  */
 import Redis from "ioredis";
-import { CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY } from "@canvas/redis-scripts";
+import { canvasKeys } from "@canvas/redis-scripts";
 import { PRESENCE_KEY_PREFIX, presenceInstanceKey } from "./schema";
 
 export interface RedisPair {
@@ -38,14 +38,16 @@ export interface CanvasSnapshot {
  */
 export async function readCanvasSnapshot(
   cmd: Redis,
+  canvasId: string,
   width: number,
   height: number,
 ): Promise<CanvasSnapshot> {
+  const keys = canvasKeys(canvasId);
   const expected = width * height;
   const res = await cmd
     .multi()
-    .get(CANVAS_WRITE_COUNTER_KEY)
-    .getBuffer(CANVAS_BITMAP_KEY)
+    .get(keys.meta)
+    .getBuffer(keys.pixels)
     .exec();
   if (!res) throw new Error("MULTI for snapshot read returned null (aborted)");
 

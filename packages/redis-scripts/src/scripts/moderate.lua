@@ -21,8 +21,13 @@
 -- the pre-wipe state before it is overwritten. That ordering is the caller's
 -- responsibility (gateway/worker), not this script's.
 --
--- KEYS[1] = canvas bitmap key   (string, 1 byte/pixel, row-major)
--- KEYS[2] = write counter key   (monotonic global write sequence; fan-out + resync)
+-- KEYS[1] = canvas pixels key   (string, 1 byte/pixel, row-major)
+-- KEYS[2] = meta / version key  (monotonic per-canvas write sequence; fan-out + resync)
+--
+-- NOTE (FEN-54): unlike place.lua, this script does NOT XADD to the durable
+-- per-canvas stream, so a moderation overwrite applied between worker snapshots
+-- is not replayed on restore. Reconciling moderation durability is a tracked
+-- follow-up (ADR-0003); FEN-54 makes the placement hot path durable.
 --
 -- ARGV[1] = width
 -- ARGV[2] = height

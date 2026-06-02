@@ -26,6 +26,14 @@ export interface GatewayConfig {
   width: number;
   height: number;
 
+  /**
+   * Canvas id this gateway serves — the namespace for the per-canvas hot-path
+   * Redis keys (`canvasKeys`, ADR-0003), fixed equal to the F2 `slug` and the
+   * worker's drain target (ADR-0001). From GATEWAY_CANVAS_ID; falls back to
+   * DEFAULT_CANVAS_ID for local single-canvas smoke.
+   */
+  canvasId?: string;
+
   /** ms between coalesced delta flushes to clients (fan-out cadence). */
   flushIntervalMs: number;
   /** in-memory ring buffer size for incremental resync (number of recent writes). */
@@ -91,6 +99,7 @@ export function loadConfig(): GatewayConfig {
     redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
     width: num("CANVAS_WIDTH", CANVAS_WIDTH),
     height: num("CANVAS_HEIGHT", CANVAS_HEIGHT),
+    canvasId: process.env.GATEWAY_CANVAS_ID || undefined,
     flushIntervalMs: num("FLUSH_INTERVAL_MS", 50),
     resyncBufferSize: num("RESYNC_BUFFER_SIZE", 8_192),
     presenceRefreshMs,

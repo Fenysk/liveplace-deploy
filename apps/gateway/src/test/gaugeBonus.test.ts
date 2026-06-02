@@ -76,6 +76,23 @@ test("SessionGauge.refresh picks up a mid-session purchase (FEN-27 #3)", async (
   assert.equal(g.effectiveGaugeMax, 22);
 });
 
+test("SessionGauge for an anonymous viewer (userId null) never queries the source (FEN-53)", async () => {
+  // An anonymous read-only viewer has no durable bonus and never places; refresh
+  // must stay at base and must NOT call the source (which only takes a real id).
+  let calls = 0;
+  const source: GaugeBonusSource = {
+    async getGaugeBonus() {
+      calls++;
+      return 7;
+    },
+  };
+  const g = new SessionGauge(source, null, 20);
+  assert.equal(g.effectiveGaugeMax, 20);
+  assert.equal(await g.refresh(), 0);
+  assert.equal(g.effectiveGaugeMax, 20);
+  assert.equal(calls, 0);
+});
+
 test("SessionGauge.refresh keeps the last known bonus when the source fails", async () => {
   let fail = false;
   const source: GaugeBonusSource = {

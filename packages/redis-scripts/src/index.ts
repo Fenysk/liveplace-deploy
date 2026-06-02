@@ -43,38 +43,120 @@ export const MODERATE_LUA: string = loadScript("moderate.lua");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Key schema. Keep all key construction here so every service agrees.
+//
+// Per-canvas keys are derived from the canvas id (ADR-0003). The canvas id is the
+// gateway's GATEWAY_CANVAS_ID, fixed equal to the F2 `slug` (ADR-0001) — the same
+// value the persistence worker addresses Convex by — so the hot-path keys and the
+// durable side agree without a translation table. `canvasKeys(id)` is the single
+// source of truth, ported from the worker (FEN-17) lineage; every service builds
+// its keys here.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The canvas itself: one Redis string, 1 byte/pixel, row-major (offset = y*W + x). */
-export const CANVAS_BITMAP_KEY = "canvas:bitmap";
+/** Default canvas id when GATEWAY_CANVAS_ID is unset (local smoke / single canvas). */
+export const DEFAULT_CANVAS_ID = "default";
+
+/** The per-canvas Redis keys the hot path and the worker share. */
+export interface CanvasKeys {
+  /** The canvas bitmap: one Redis string, 1 byte/pixel, row-major (offset = y*W + x). */
+  pixels: string;
+  /**
+   * Monotonic write counter == the canvas version / global delta sequence.
+   * place.lua / moderate.lua INCR it per write and stamp each delta + stream
+   * record with the result, so its value is "the version of the most recent
+   * write". The gateway reads it next to the bitmap to label a snapshot for
+   * resync (F7/FEN-13); the worker reads it as the canvas head version. (A plain
+   * integer string today; the "meta" name leaves room to grow it into a hash
+   * without moving the key.)
+   */
+  meta: string;
+  /**
+   * Durable per-canvas placement stream (R2). place.lua XADDs one entry per
+   * accepted placement carrying the FULL record {x,y,color,version,userId,ts};
+   * the persistence worker (FEN-17) drains it to Convex in idempotent batches
+   * keyed on `version`. This is the DURABILITY path — distinct from the
+   * ephemeral DELTA_CHANNEL pub/sub, which stays the realtime fan-out path.
+   */
+  stream: string;
+  /**
+   * Emergency-freeze flag (F8.4). `"1"` = placement is closed for everyone;
+   * absent/falsey = open. place.lua reads it before touching the gauge so a
+   * moderator's freeze/unfreeze takes effect on the very next placement (CA4).
+   * A single SET/DEL on this key is the whole freeze action.
+   */
+  frozen: string;
+}
+
+/**
+ * Build every per-canvas Redis key from the canvas id (= GATEWAY_CANVAS_ID = F2
+ * `slug`, ADR-0001/ADR-0003). Ported from the worker lineage so the gateway hot
+ * path and the worker drain agree on the exact key namespace.
+ */
+export function canvasKeys(canvasId: string): CanvasKeys {
+  return {
+    pixels: `canvas:${canvasId}:pixels`,
+    meta: `canvas:${canvasId}:meta`,
+    stream: `canvas:${canvasId}:stream`,
+    frozen: `canvas:${canvasId}:frozen`,
+  };
+}
 
 /**
  * Per-user gauge hash: { c = charges, ts = refill clock epoch ms }. The upgrade
  * bonus is NOT stored here — it lives in Convex (F6) and the gateway folds it
- * into the effective max passed to the scripts.
+ * into the effective max passed to the scripts. The gauge is per-user (not
+ * per-canvas) in the single-canvas MVP, so it keeps its own flat key.
  */
 export function userGaugeKey(userId: string): string {
   return `gauge:${userId}`;
 }
 
 /**
- * Monotonic counter of total writes. Also the global delta sequence: place.lua
- * INCRs it per write and stamps each published delta with the result, so its
- * value is "the seq of the most recent write". The gateway reads it next to the
- * bitmap to label a snapshot for resync (F7/FEN-13).
+ * Pub/sub channel carrying individual pixel writes ("seq,x,y,color") for the
+ * realtime fan-out (F7/FEN-13). Kept global and ephemeral by design (FEN-54 #3):
+ * the durable, per-canvas record lives on the `stream` key instead, so this
+ * channel never has to grow `userId`/`ts` or become per-canvas.
  */
-export const CANVAS_WRITE_COUNTER_KEY = "canvas:writes:count";
-
-/** Pub/sub channel carrying individual pixel writes ("seq,x,y,color") for fan-out. */
 export const DELTA_CHANNEL = "canvas:deltas";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Durable placement stream record (R2). The shape place.lua XADDs and the
+// persistence worker drains. Field order here MUST match the XADD in place.lua.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Field names of a placement stream entry, in XADD order. */
+export const STREAM_FIELDS = ["x", "y", "color", "version", "userId", "ts"] as const;
+
+/** One durable placement, as carried by a `canvas:{id}:stream` entry. */
+export interface PlacementStreamRecord {
+  x: number;
+  y: number;
+  color: number;
+  /** Global monotonic write sequence (== the `meta` counter at write time). */
+  version: number;
+  /** Authenticated placer; "" if none was threaded (anonymous never places). */
+  userId: string;
+  /** Epoch ms the placement was accepted (place.lua's nowMs). */
+  ts: number;
+}
+
 /**
- * Emergency-freeze flag (F8.4). `"1"` = placement is closed for everyone;
- * absent/falsey = open. place.lua reads it before touching the gauge so a
- * moderator's freeze/unfreeze takes effect on the very next placement (CA4).
- * A single SET/DEL on this key is the whole freeze action.
+ * Parse the flat [field, value, field, value, …] array ioredis returns for a
+ * stream entry's fields (the second element of each XRANGE/XREAD tuple) into a
+ * PlacementStreamRecord. Unknown/extra fields are ignored; missing numerics
+ * become NaN so a malformed entry is detectable rather than silently 0.
  */
-export const CANVAS_FROZEN_KEY = "canvas:frozen";
+export function parseStreamRecord(fields: ReadonlyArray<string>): PlacementStreamRecord {
+  const m = new Map<string, string>();
+  for (let i = 0; i + 1 < fields.length; i += 2) m.set(fields[i]!, fields[i + 1]!);
+  return {
+    x: Number(m.get("x")),
+    y: Number(m.get("y")),
+    color: Number(m.get("color")),
+    version: Number(m.get("version")),
+    userId: m.get("userId") ?? "",
+    ts: Number(m.get("ts")),
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed wrappers for the script results.
@@ -128,10 +210,16 @@ export function parsePeekResult(raw: unknown): PeekResult {
 
 /**
  * Build args for place.lua.
- * KEYS = [canvasBitmapKey, userGaugeKey, writeCounterKey, frozenFlagKey]; ARGV as
- * documented in the script. The write counter feeds the monotonic per-write
- * sequence used for reconnect/resync (FEN-13); the frozen flag (F8.4) lets a
- * moderator close placement for everyone with a single SET.
+ * KEYS = [pixels, userGaugeKey, meta, frozen, stream]; ARGV as documented in the
+ * script. `meta` feeds the monotonic per-write version used for reconnect/resync
+ * (FEN-13) AND stamped onto each durable stream record (R2); the frozen flag
+ * (F8.4) lets a moderator close placement for everyone with a single SET. The
+ * authenticated `userId` is threaded into both the gauge key and the stream
+ * record (ARGV) so the worker's placement log carries the placer (FEN-54 #2).
+ *
+ * `canvasId` defaults to DEFAULT_CANVAS_ID for single-canvas/local use; a caller
+ * serving a specific canvas (GATEWAY_CANVAS_ID set) MUST pass it so placements
+ * land on the SAME per-canvas keys the gateway's snapshot read uses.
  */
 export function placeArgs(opts: {
   x: number;
@@ -143,10 +231,12 @@ export function placeArgs(opts: {
   nowMs: number;
   gauge: GaugeParams;
   userId: string;
+  canvasId?: string;
   deltaChannel?: string;
-}): { keys: [string, string, string, string]; argv: string[] } {
+}): { keys: [string, string, string, string, string]; argv: string[] } {
+  const k = canvasKeys(opts.canvasId ?? DEFAULT_CANVAS_ID);
   return {
-    keys: [CANVAS_BITMAP_KEY, userGaugeKey(opts.userId), CANVAS_WRITE_COUNTER_KEY, CANVAS_FROZEN_KEY],
+    keys: [k.pixels, userGaugeKey(opts.userId), k.meta, k.frozen, k.stream],
     argv: [
       String(opts.x),
       String(opts.y),
@@ -160,6 +250,7 @@ export function placeArgs(opts: {
       String(opts.gauge.gaugeMax),
       String(opts.gauge.gaugeTtlMs),
       opts.deltaChannel ?? DELTA_CHANNEL,
+      opts.userId,
     ],
   };
 }
@@ -201,18 +292,25 @@ export interface ModerateResult {
 
 /**
  * Build args for moderate.lua — the atomic bulk overwrite behind ban+wipe,
- * delete and restore (F8.1–F8.3). KEYS = [canvasBitmapKey, writeCounterKey];
- * ARGV = [width, height, paletteSize, deltaChannel, count, x,y,color, …]. The
- * caller (gateway, on a Convex-authorised moderation action) supplies the cells
- * and the colours to write; the script applies and fans them out atomically.
+ * delete and restore (F8.1–F8.3). KEYS = [pixels, meta]; ARGV = [width, height,
+ * paletteSize, deltaChannel, count, x,y,color, …]. The caller (gateway, on a
+ * Convex-authorised moderation action) supplies the cells and the colours to
+ * write; the script applies them to the same per-canvas bitmap/version as
+ * place.lua and fans them out atomically on the shared DELTA_CHANNEL.
+ *
+ * NOTE (FEN-54): moderation overwrites do NOT yet XADD to the durable `stream`,
+ * so the worker would not replay a wipe applied between snapshots. Tracked as a
+ * follow-up (see ADR-0003); the placement hot path is what FEN-54 makes durable.
  */
 export function moderateArgs(opts: {
   width: number;
   height: number;
   paletteSize: number;
+  canvasId?: string;
   cells: ReadonlyArray<ModerationCell>;
   deltaChannel?: string;
 }): { keys: [string, string]; argv: string[] } {
+  const k = canvasKeys(opts.canvasId ?? DEFAULT_CANVAS_ID);
   const argv: string[] = [
     String(opts.width),
     String(opts.height),
@@ -223,7 +321,7 @@ export function moderateArgs(opts: {
   for (const c of opts.cells) {
     argv.push(String(c.x), String(c.y), String(c.color));
   }
-  return { keys: [CANVAS_BITMAP_KEY, CANVAS_WRITE_COUNTER_KEY], argv };
+  return { keys: [k.pixels, k.meta], argv };
 }
 
 /** Parse the raw [applied, lastSeq] array from moderate.lua. */

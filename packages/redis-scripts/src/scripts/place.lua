@@ -19,12 +19,17 @@
 -- sum here; raising it lifts the ceiling immediately (D1 CA3). The gauge hash is
 -- just { c, ts } — the bonus lives in Convex, never in Redis (F6 contract).
 --
--- KEYS[1] = canvas bitmap key   (string, 1 byte/pixel, row-major)
+-- KEYS[1] = canvas pixels key   (string, 1 byte/pixel, row-major)
 -- KEYS[2] = user gauge key       (hash: { c = charges, ts = refill clock ms })
--- KEYS[3] = write counter key    (monotonic global write sequence; fan-out + resync)
+-- KEYS[3] = meta / version key   (monotonic per-canvas write sequence; fan-out + resync)
 -- KEYS[4] = frozen flag key       (optional; emergency freeze, F8.4. "1" = placement
 --                                  closed for everyone. Absent/falsey = open. Checked
 --                                  before any gauge work so a freeze is instantaneous.)
+-- KEYS[5] = durable stream key    (optional; per-canvas placement stream, R2. Each
+--                                  accepted write is XADDed here as a full
+--                                  {x,y,color,version,userId,ts} record for the worker
+--                                  to drain to Convex. Omit it and no stream is written
+--                                  — e.g. unit harnesses passing only pixels+gauge.)
 --
 -- ARGV[1]  = x
 -- ARGV[2]  = y
@@ -32,12 +37,14 @@
 -- ARGV[4]  = height
 -- ARGV[5]  = color (palette index; 0 = eraser, still costs 1)
 -- ARGV[6]  = paletteSize
--- ARGV[7]  = nowMs
+-- ARGV[7]  = nowMs               (also the ts stamped onto the stream record)
 -- ARGV[8]  = refillIntervalMs
 -- ARGV[9]  = refillAmount
 -- ARGV[10] = gaugeMax            (effective max = base + bonus, computed by the gateway)
 -- ARGV[11] = gaugeTtlMs          (TTL on the gauge hash; 0 = never expire)
 -- ARGV[12] = deltaChannel        (pub/sub channel for fan-out; "" disables publish)
+-- ARGV[13] = userId              (authenticated placer; stamped onto the stream record.
+--                                  May be "" — defensive only; anonymous never places.)
 --
 -- Returns: { status, charges, max, cooldownUntil }
 --   status        = "ok" | "cooldown" | "out_of_bounds" | "invalid_color" | "frozen"
@@ -58,6 +65,7 @@ local amount     = tonumber(ARGV[9])
 local max        = tonumber(ARGV[10])
 local gaugeTtl   = tonumber(ARGV[11])
 local deltaChan  = ARGV[12]
+local placerId   = ARGV[13] or ""
 
 -- Emergency freeze (F8.4): a moderator can close the canvas for everyone in one
 -- write (SET frozen flag). Checked before bounds/gauge so it takes effect on the
@@ -105,18 +113,31 @@ end
 local offset = y * width + x
 redis.call("SETRANGE", KEYS[1], offset, string.char(color))
 
--- Assign a global, monotonic sequence to this write and fan it out. Done inside
--- the same atomic script as the SETRANGE, so seq order == write order, and the
--- value is shared across every gateway instance — which is what lets a
--- reconnecting client replay exactly what it missed (resync, F7/FEN-13). It
--- also labels the snapshot a fresh client reads.
+-- Assign a per-canvas, monotonic version to this write, persist it durably, and
+-- fan it out. All inside the same atomic script as the SETRANGE, so version
+-- order == write order across every gateway instance — which is what lets a
+-- reconnecting client replay exactly what it missed (resync, F7/FEN-13) and lets
+-- the worker drain an exactly-ordered placement log (R2). The version also
+-- labels the snapshot a fresh client reads.
 --
--- Guarded on KEYS[3] so callers that don't care about fan-out (e.g. unit
--- harnesses passing only the bitmap + gauge keys) still work.
+-- Two sinks, decided independently of each other (FEN-54):
+--   * KEYS[5] stream — the DURABILITY path. XADD the full record the worker
+--     drains to Convex. Written whenever a stream key is supplied, regardless of
+--     whether fan-out is enabled.
+--   * deltaChan pub/sub — the REALTIME path. The ephemeral "version,x,y,color"
+--     payload the gateway coalesces to clients; unchanged by FEN-54.
+--
+-- Guarded on KEYS[3] so callers that don't care about versioning (e.g. unit
+-- harnesses passing only the pixels + gauge keys) still work.
 if KEYS[3] then
-  local seq = redis.call("INCR", KEYS[3])
+  local version = redis.call("INCR", KEYS[3])
+  if KEYS[5] then
+    redis.call("XADD", KEYS[5], "*",
+      "x", x, "y", y, "color", color,
+      "version", version, "userId", placerId, "ts", now)
+  end
   if deltaChan ~= "" then
-    redis.call("PUBLISH", deltaChan, seq .. "," .. x .. "," .. y .. "," .. color)
+    redis.call("PUBLISH", deltaChan, version .. "," .. x .. "," .. y .. "," .. color)
   end
 end
 

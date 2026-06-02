@@ -86,7 +86,8 @@ export class SessionGauge {
 
   constructor(
     private readonly source: GaugeBonusSource,
-    private readonly userId: string,
+    /** Signed-in user id, or `null` for an anonymous read-only viewer (no bonus, never places). */
+    private readonly userId: string | null,
     private readonly baseGaugeMax: number,
   ) {}
 
@@ -106,6 +107,9 @@ export class SessionGauge {
    * paid-for ceiling), and the error is surfaced to the caller for logging.
    */
   async refresh(): Promise<number> {
+    // Anonymous viewers never place, so there is no durable bonus to resolve —
+    // and the Convex source only takes a real user id. Stay at base (bonus 0).
+    if (this.userId === null) return this.resolvedBonus;
     this.resolvedBonus = await this.source.getGaugeBonus(this.userId);
     return this.resolvedBonus;
   }

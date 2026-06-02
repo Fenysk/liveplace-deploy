@@ -5,8 +5,11 @@
  * connects to Redis, subscribes to the delta channel, and serves the live pixel
  * stream to web + OBS clients. Business placement validation is F4/F5.
  */
+import { PALETTE_SIZE } from "@canvas/protocol";
 import { loadConfig, type GatewayConfig } from "./config";
 import { Gateway } from "./gateway";
+import { createRedisPair } from "./redis";
+import { IoredisPlaceRunner, RedisPlacementHandler } from "./placement";
 import {
   ConvexGaugeBonusSource,
   StaticGaugeBonusSource,
@@ -39,7 +42,19 @@ async function createBonusSource(cfg: GatewayConfig): Promise<GaugeBonusSource> 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   const bonusSource = await createBonusSource(cfg);
-  const gateway = new Gateway(cfg, undefined, undefined, bonusSource);
+
+  // Compose the real F5 placement path here (the gateway's default is the
+  // safe rejecting handler). It owns the Redis command connection so the
+  // gateway and place.lua share one client; place.lua is EVALSHA-cached.
+  const redis = createRedisPair(cfg.redisUrl);
+  const placement = new RedisPlacementHandler(new IoredisPlaceRunner(redis.cmd), {
+    width: cfg.width,
+    height: cfg.height,
+    paletteSize: PALETTE_SIZE,
+    gauge: cfg.gauge.base,
+  });
+
+  const gateway = new Gateway(cfg, placement, redis, bonusSource);
   await gateway.start();
 
   let shuttingDown = false;
