@@ -62,12 +62,28 @@ async function main(): Promise<void> {
   }
 
   // Resume cursor: the durable stream id, or "0" to start from the beginning.
-  let cursor = (await convex.getFlushState(cfg.slug))?.lastStreamId ?? "0";
+  // Guarded like getCanvasDurable/restore above: when Convex functions are not
+  // deployed yet (anonymous/bootstrap mode — no admin key, FEN-80), this query
+  // throws; we must NOT crash the process (restart-loop), so we start at "0" and
+  // let the drain loop (which tolerates Convex errors per-tick) idle until Convex
+  // is deployed.
+  let cursor = "0";
+  try {
+    cursor = (await convex.getFlushState(cfg.slug))?.lastStreamId ?? "0";
+  } catch (err) {
+    log("getFlushState failed; starting cursor at 0 (Convex not deployed yet?)", { err: String(err) });
+  }
   log("resume cursor", { cursor });
 
-  // Snapshot bookkeeping seeded off the latest durable snapshot.
+  // Snapshot bookkeeping seeded off the latest durable snapshot (same guard).
+  let lastVersion = 0;
+  try {
+    lastVersion = (await convex.getLatestSnapshot(cfg.slug))?.version ?? 0;
+  } catch (err) {
+    log("getLatestSnapshot failed; lastVersion=0 (Convex not deployed yet?)", { err: String(err) });
+  }
   const snapState: SnapshotState = {
-    lastVersion: (await convex.getLatestSnapshot(cfg.slug))?.version ?? 0,
+    lastVersion,
     lastAtMs: Date.now(),
   };
   const snapPolicy = {
