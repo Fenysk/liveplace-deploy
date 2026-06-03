@@ -80,6 +80,7 @@ fi
 ENV_TMP=".env.convex.$$"
 : > "$ENV_TMP"
 for name in \
+  BETTER_AUTH_SECRET \
   BETTER_AUTH_URL \
   CONVEX_SITE_URL \
   GATEWAY_INTERNAL_SECRET \
