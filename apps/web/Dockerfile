@@ -52,5 +52,9 @@ WORKDIR /app
 COPY infra/web-serve.mjs ./web-serve.mjs
 COPY --from=build /app/apps/web/dist ./public
 EXPOSE 3000
+# Drop root (FEN-87): the static server only reads /app/public (world-readable)
+# and binds an unprivileged port (3000 > 1024), so the built-in `node` user
+# (uid 1000) suffices. No corepack/pnpm at runtime here.
+USER node
 # busybox wget (alpine) backs the compose healthcheck against /healthz.
 CMD ["node", "web-serve.mjs"]

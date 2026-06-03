@@ -27,6 +27,27 @@
 
 	encode gzip zstd
 
+	# Security headers (FEN-87, defence-in-depth — no player-facing behaviour).
+	#
+	# Same-origin model: the SPA, Convex client API/sync (/convex), Better Auth
+	# (/api/auth) and the WS gateway (/ws) are ALL served from THIS origin, so
+	# `'self'` already covers https fetch + same-host wss — no separate Convex /
+	# gateway origins need listing in the default deployment. For a SPLIT-origin
+	# Convex (Convex on its own host), append space-separated origins via env:
+	#   CSP_CONNECT_EXTRA="https://convex.example.com wss://convex.example.com"
+	#   CSP_IMG_EXTRA="https://convex.example.com"
+	#
+	# script-src stays strict 'self' (the built SPA loads only external module
+	# scripts — verified, no inline). style-src allows 'unsafe-inline' because the
+	# bundler/UI may inject <style>; inline style is low-risk vs inline script.
+	# img-src adds the Twitch avatar CDN (profile/gallery avatars) + data: URIs.
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://static-cdn.jtvnw.net {$CSP_IMG_EXTRA:}; font-src 'self' data:; connect-src 'self' {$CSP_CONNECT_EXTRA:}"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
 	# WebSocket gateway (separate service, ADR-0003).
 	@ws path /ws /ws/*
 	reverse_proxy @ws gateway:8080

@@ -32,8 +32,23 @@ const MIME = {
   ".txt": "text/plain; charset=utf-8",
 };
 
+// Defence-in-depth security headers (FEN-87). The edge Caddy proxy sets the
+// authoritative, origin-aware CSP (incl. the split-origin env extras) and
+// OVERWRITES these in the normal request path. This static baseline only matters
+// if the web container is ever reached directly (container-to-container, or a
+// future direct expose), so it stays self-contained — no env templating. Same
+// strict script-src / lenient style-src posture as the edge.
+const SECURITY_HEADERS = {
+  "content-security-policy":
+    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; " +
+    "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: https://static-cdn.jtvnw.net; font-src 'self' data:; connect-src 'self'",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+};
+
 async function send(res, status, body, type = "text/plain; charset=utf-8") {
-  res.writeHead(status, { "content-type": type });
+  res.writeHead(status, { "content-type": type, ...SECURITY_HEADERS });
   res.end(body);
 }
 
