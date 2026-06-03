@@ -210,13 +210,12 @@ const DEFAULT_CANVAS_SLUG = "default";
 
 /**
  * Live hot-path geometry (WS protocol `CANVAS_WIDTH`/`CANVAS_HEIGHT` = 512).
- * NOTE: this exceeds the F2 public-create cap `MAX_DIMENSION` (500) that
- * `assertValidDimensions` enforces, so the seed intentionally bypasses that
- * check: `getCanvasDurable` feeds these dims back to the worker to rebuild the
- * Redis bitmap on restore, so they MUST match the deployed gateway/Redis
- * geometry, not the public-create limit. The 512-vs-500 divergence between the
- * WS protocol and `canvasRules` is an FE-owned contract reconciliation (flagged
- * on FEN-94); the seed mirrors what is actually deployed.
+ * `getCanvasDurable` feeds these dims back to the worker to rebuild the Redis
+ * bitmap on restore, so they MUST match the deployed gateway/Redis geometry.
+ * Since FEN-95 / ADR-0004 the F2 public-create cap `MAX_DIMENSION` is also 512,
+ * so this value is now within the `assertValidDimensions` bound — the divergence
+ * the seed used to bypass is retired. The seed still inserts directly (it is an
+ * `internalMutation`, not `createCanvas`), so it never calls the validator.
  */
 const HOT_PATH_DIMENSION = 512;
 

@@ -63,7 +63,7 @@ test("dimensions: default is 100×100 and within bounds", () => {
 
 test("dimensions: out-of-bounds and non-integers are rejected", () => {
   assert.equal(ruleCode(() => assertValidDimensions(15, 100)), "invalid_dimensions");
-  assert.equal(ruleCode(() => assertValidDimensions(100, 501)), "invalid_dimensions");
+  assert.equal(ruleCode(() => assertValidDimensions(100, MAX_DIMENSION + 1)), "invalid_dimensions");
   assert.equal(ruleCode(() => assertValidDimensions(100.5, 100)), "invalid_dimensions");
   assert.equal(ruleCode(() => assertValidDimensions(0, 0)), "invalid_dimensions");
 });

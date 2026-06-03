@@ -18,6 +18,10 @@ export const PROTOCOL_VERSION = 1;
 // frame rather than hard-coding these, so a later change is non-breaking.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// 512 is also the F2 public-create ceiling (`canvasRules.MAX_DIMENSION`,
+// ADR-0004), so the deployed default geometry is a valid `createCanvas` value
+// and the authenticated path can never be capped below the hot path. The binary
+// frames encode width/height/x/y as u16, so 512 is well within range.
 export const CANVAS_WIDTH = 512;
 export const CANVAS_HEIGHT = 512;
 

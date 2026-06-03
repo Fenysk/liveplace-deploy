@@ -16,8 +16,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const MIN_DIMENSION = 16;
-export const MAX_DIMENSION = 500;
-/** Hard cap on total cells (memory/perf bound, §9.5/§10). 500×500 = 250 000. */
+/**
+ * Public-create ceiling. Aligned to the WS/Redis hot-path geometry
+ * (`@canvas/protocol` `CANVAS_WIDTH`/`CANVAS_HEIGHT` = 512) per ADR-0004, so the
+ * deployed default geometry is itself a valid `createCanvas` value and an
+ * authenticated streamer can never be plafonné below what gateway/worker/Redis
+ * assume. 512 is a power of two and u16-safe (the binary protocol encodes
+ * width/height/x/y as u16). Keep this in lockstep with the protocol geometry.
+ */
+export const MAX_DIMENSION = 512;
+/** Hard cap on total cells (memory/perf bound, §9.5/§10). 512×512 = 262 144. */
 export const MAX_CELLS = MAX_DIMENSION * MAX_DIMENSION;
 export const DEFAULT_DIMENSION = 100;
 
