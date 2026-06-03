@@ -65,9 +65,14 @@ services:
     image: caddy:2-alpine
     environment:
       - SITE_ADDRESS=${SITE_ADDRESS:-:80}
-    ports:
-      - "${PROXY_HTTP_PORT:-8080}:80"
-      - "${PROXY_HTTPS_PORT:-8443}:443"
+    # NO host port publishing on Coolify: its Traefik edge routes the bound domain
+    # to this container's INTERNAL port 80 over the docker network. Publishing host
+    # 8080/8443 is unnecessary AND conflict-prone — a prior failed deploy's
+    # `restart: unless-stopped` proxy can keep holding those host ports, so the next
+    # deploy's proxy fails to bind and the whole `up` fails (FEN-80). `expose`
+    # documents the internal port Coolify routes to.
+    expose:
+      - "80"
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
