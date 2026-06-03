@@ -94,34 +94,37 @@ agent cannot self-supply:
 | `COOLIFY_PROJECT_UUID`, `COOLIFY_SERVER_UUID` | Read once from the Coolify UI/API |
 | `COOLIFY_GIT_REPOSITORY` (+ `…_BRANCH`) | The public repo seeded from the bundle above |
 | `PUBLIC_BASE_URL` | The FQDN routed to the stack (or leave blank to let Coolify autogenerate) |
-| `CONVEX_SELF_HOSTED_ADMIN_KEY` | **One-time**, minted by the backend — see below |
+| `CONVEX_SELF_HOSTED_ADMIN_KEY` | **Leave blank** — minted in-stack at `up` time (FEN-92, see below). Set only to pin an externally-minted key. |
 
 Everything else the script generates or derives. Persist the generated
 `CONVEX_INSTANCE_SECRET` / `BETTER_AUTH_SECRET` / `GATEWAY_INTERNAL_SECRET` in
 Coolify so redeploys stay stable.
 
-### The Convex admin key (the one non-obvious step)
+### The Convex admin key — minted in-stack, no manual step (FEN-92)
 
 The hot pixel path is Redis-only, but the gateway/worker are gated on the
 `convex-deploy` one-shot completing, and `convex deploy` authenticates with
 `CONVEX_SELF_HOSTED_ADMIN_KEY`. That key is **deterministic per
-`CONVEX_INSTANCE_SECRET`** but is minted by the backend binary, so it cannot be
-precomputed off-box. First deploy only:
+`CONVEX_INSTANCE_SECRET`**. It used to require a one-time on-box mint
+(`docker compose exec convex-backend ./generate_admin_key.sh`) — a Coolify-UI
+terminal / SSH step an agent cannot perform. **That step is now gone.**
 
-1. Run the script once. The stack comes up; `convex-deploy` will fail without the
-   key (gateway/worker stay down) — expected on first pass.
-2. Mint the key against the running backend (Coolify UI terminal, or its exec):
-   ```
-   ./generate_admin_key.sh        # inside the convex-backend container
-   ```
-3. Paste it into `deploy.env` as `CONVEX_SELF_HOSTED_ADMIN_KEY` **and** keep the
-   matching `CONVEX_INSTANCE_SECRET` (they are a bound pair — the script warns if
-   the secret is blank while a key is set).
-4. Re-run the script. `convex-deploy` succeeds → gateway/worker/web go healthy →
-   smoke runs.
+`docker-compose.yml` ships a `convex-admin-key` one-shot: it runs the SAME
+`generate_admin_key.sh` (baked into the `convex-backend` image) from a throwaway
+container sharing `INSTANCE_NAME` + `INSTANCE_SECRET` with the backend, and writes
+the key to the shared `convex-admin` volume. `convex-deploy` reads it from
+`/admin/admin_key` (`apps/convex/deploy.sh`) and pushes the functions →
+persistence is enabled on a plain `up`, **zero manual intervention**.
 
-The key never changes for a given instance secret, so this is a one-time
-provisioning step, not a per-deploy intervention.
+- **Leave `CONVEX_SELF_HOSTED_ADMIN_KEY` blank** in `deploy.env`. The script no
+  longer flags it as a gap; an operator-supplied value still wins if you ever
+  need to pin one.
+- The mint is **idempotent** (same secret → same key) and **best-effort**: if it
+  ever fails (e.g. the script moves in a future image), the one-shot exits 0 and
+  the stack comes up in anonymous mode (no persistence) instead of hard-failing
+  `up` — observable in the `convex-admin-key` logs, not a dead stack.
+- Keep `CONVEX_INSTANCE_SECRET` stable across redeploys (the deploy script
+  persists the generated one), so the minted key stays valid.
 
 ## TLS / D5 — HTTPS Twitch callback
 
