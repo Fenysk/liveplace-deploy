@@ -61,3 +61,8 @@ fi
 
 printf '%s' "$KEY" > "$KEYFILE"
 echo "[mint] admin key written to $KEYFILE ($(wc -c < "$KEYFILE") bytes)"
+# Explicit success: this one-shot must ALWAYS exit 0 (FEN-96). A non-zero exit
+# here would fail `docker compose up -d` via convex-deploy's dependency gate and
+# mark the whole Coolify deploy `failed`. Persistence-off is a degraded-but-up
+# state, never a deploy failure.
+exit 0

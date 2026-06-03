@@ -97,8 +97,20 @@ services:
     depends_on:
       convex-backend:
         condition: service_healthy
+      # FEN-96: ORDER on convex-admin-key (it must start first to mint the key),
+      # but do NOT gate on it COMPLETING SUCCESSFULLY. `service_completed_successfully`
+      # makes `docker compose up -d` BLOCK on the one-shot and PROPAGATE its exit
+      # code: when convex-admin-key exited non-zero, `up -d` returned `exit 1` and
+      # Coolify marked the (otherwise healthy, serving) deploy `failed` — the
+      # misleading-status bug. The admin key is best-effort persistence wiring, never
+      # a reason to fail the deploy. `service_started` keeps the boot order without
+      # letting a best-effort one-shot fail the stack; deploy.sh below polls the
+      # shared /admin/admin_key volume so it still picks the key up once minted.
+      # Genuine infra failures are still caught: convex-deploy/worker gate on
+      # convex-backend `service_healthy`, so an unhealthy backend (or a failed
+      # image build) still fails `up -d` honestly.
       convex-admin-key:
-        condition: service_completed_successfully
+        condition: service_started
     restart: "no"
 
   gateway:

@@ -17,12 +17,27 @@ cd /app/apps/convex
 #     (FEN-92), which writes it to the shared /admin volume. An explicit
 #     CONVEX_SELF_HOSTED_ADMIN_KEY from the environment still wins. This is what
 #     makes persistence agent-only: no manual `generate_admin_key.sh` terminal.
-if [ -z "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ] && [ -r /admin/admin_key ]; then
-  CONVEX_SELF_HOSTED_ADMIN_KEY="$(cat /admin/admin_key 2>/dev/null || true)"
-  export CONVEX_SELF_HOSTED_ADMIN_KEY
-  if [ -n "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ]; then
-    echo "[convex-deploy] loaded admin key from /admin/admin_key (minted in-stack by convex-admin-key)"
-  fi
+#
+#     FEN-96: convex-deploy now orders on convex-admin-key via `service_started`
+#     (not `service_completed_successfully`, which propagated the one-shot's exit
+#     code into `docker compose up -d` and failed the deploy). So the keyfile may
+#     not exist the instant we start — poll the shared volume briefly for a
+#     NON-EMPTY key before falling back to anonymous mode. Bounded so a genuinely
+#     absent key (mint failed → empty keyfile) still degrades cleanly to
+#     anonymous/persistence-off rather than hanging the boot.
+if [ -z "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ]; then
+  _waited=0
+  while [ "$_waited" -lt 30 ]; do
+    if [ -s /admin/admin_key ]; then
+      CONVEX_SELF_HOSTED_ADMIN_KEY="$(cat /admin/admin_key 2>/dev/null || true)"
+      export CONVEX_SELF_HOSTED_ADMIN_KEY
+      [ -n "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ] && \
+        echo "[convex-deploy] loaded admin key from /admin/admin_key (minted in-stack by convex-admin-key, after ${_waited}s)"
+      break
+    fi
+    sleep 2
+    _waited=$((_waited + 2))
+  done
 fi
 
 # 0b) Bootstrap/anonymous mode: the self-hosted admin key is minted on-box, one
