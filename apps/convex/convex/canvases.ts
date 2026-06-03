@@ -14,6 +14,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireUserId, optionalUserId } from "./lib/identity";
 import {
   DEFAULT_DIMENSION,
+  DEFAULT_PALETTE_COLORS,
   assertOwner,
   assertResizeAllowed,
   assertValidDimensions,
@@ -187,6 +188,120 @@ export const createCanvas = mutation({
       lastActivityAt: now,
       viewerCount: 0,
     });
+  },
+});
+
+/**
+ * Synthetic owner for the anonymous-mode seed canvas. It is deliberately NOT a
+ * valid Better Auth subject (no Twitch login resolves to it), so the row is
+ * unambiguously the seed and `requireUserId`-gated mutations can never mutate it
+ * from a real session. The gallery join tolerates a missing `profiles` row:
+ * `toGalleryItem` falls back to the slug for login/displayName, so the seed
+ * canvas still renders in discovery without a streamer profile.
+ */
+const ANON_SEED_OWNER_ID = "system:anonymous";
+
+/**
+ * The default canvas slug. Mirrors `DEFAULT_CANVAS_ID` ("default", ADR-0003 /
+ * `GATEWAY_CANVAS_ID` fallback) — the slug the single-canvas anonymous
+ * deployment drains under.
+ */
+const DEFAULT_CANVAS_SLUG = "default";
+
+/**
+ * Live hot-path geometry (WS protocol `CANVAS_WIDTH`/`CANVAS_HEIGHT` = 512).
+ * NOTE: this exceeds the F2 public-create cap `MAX_DIMENSION` (500) that
+ * `assertValidDimensions` enforces, so the seed intentionally bypasses that
+ * check: `getCanvasDurable` feeds these dims back to the worker to rebuild the
+ * Redis bitmap on restore, so they MUST match the deployed gateway/Redis
+ * geometry, not the public-create limit. The 512-vs-500 divergence between the
+ * WS protocol and `canvasRules` is an FE-owned contract reconciliation (flagged
+ * on FEN-94); the seed mirrors what is actually deployed.
+ */
+const HOT_PATH_DIMENSION = 512;
+
+/**
+ * Idempotently seed the canvas row for the anonymous-mode deployment (FEN-94).
+ *
+ * Why this exists: under `GATEWAY_AUTH_DISABLED=1` there is no authenticated
+ * Twitch user, so `createCanvas` (the sole public creator, `requireUserId`-gated)
+ * never runs and no `canvases` row exists for the deployed slug. Per ADR-0001,
+ * `worker:applyFlush` / `setGalleryFields` / `recordSnapshot` are all no-ops
+ * until a row exists, so the worker drains every ~2s but persists nothing and
+ * `getCanvasDurable("default")` returns null. This seed creates that row so the
+ * drain/restore + gallery path can be exercised end-to-end (unblocks FEN-89).
+ *
+ * `internalMutation` (not public): canvas creation must never be reachable from
+ * the public `/convex/*` route (FEN-86 posture). DevOps calls it once from
+ * `apps/convex/deploy.sh` via the minted admin key (`convex run
+ * canvases:ensureDefaultCanvas`) after `convex deploy`.
+ *
+ * Idempotent: a no-op returning the existing id if the slug already has a row,
+ * so it is safe to run on every deploy.
+ */
+export const ensureDefaultCanvas = internalMutation({
+  args: {
+    slug: v.optional(v.string()),
+    width: v.optional(v.number()),
+    height: v.optional(v.number()),
+    isPublic: v.optional(v.boolean()),
+  },
+  returns: v.object({ canvasId: v.id("canvases"), created: v.boolean() }),
+  handler: async (ctx, args): Promise<{ canvasId: Id<"canvases">; created: boolean }> => {
+    const slug = args.slug ?? DEFAULT_CANVAS_SLUG;
+
+    // Idempotency: never create a second row for the slug (one-active invariant
+    // also holds — the synthetic owner has at most this one canvas).
+    const existing = await ctx.db
+      .query("canvases")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .unique();
+    if (existing) return { canvasId: existing._id, created: false };
+
+    // Ensure the system default palette exists (same logic as
+    // palettes:ensureDefaultPalette, inlined to keep this a single mutation).
+    let paletteId: Id<"palettes">;
+    const defPalette = await ctx.db
+      .query("palettes")
+      .withIndex("by_owner", (q) => q.eq("ownerId", null))
+      .first();
+    if (defPalette) {
+      paletteId = defPalette._id;
+    } else {
+      paletteId = await ctx.db.insert("palettes", {
+        ownerId: null,
+        version: 1,
+        colors: DEFAULT_PALETTE_COLORS.map((c) => ({ index: c.index, hex: c.hex })),
+      });
+    }
+
+    const now = Date.now();
+    const width = args.width ?? HOT_PATH_DIMENSION;
+    const height = args.height ?? HOT_PATH_DIMENSION;
+    const canvasId = await ctx.db.insert("canvases", {
+      ownerId: ANON_SEED_OWNER_ID,
+      slug,
+      title: "LivePlace",
+      width,
+      height,
+      paletteId,
+      status: "active",
+      placementOpen: true,
+      // Public so the seed canvas is visible in the gallery for the drain test.
+      isPublic: args.isPublic ?? true,
+      eventStartAt: null,
+      eventEndAt: null,
+      createdAt: now,
+      archivedAt: null,
+      lastSnapshotAt: null,
+      cellCount: 0,
+      // Gallery (F12): seed activity to creation so it sorts immediately; the
+      // worker advances lastActivityAt/viewerCount/thumbnail off the hot path —
+      // which is exactly what FEN-89's drain/restore smoke verifies.
+      lastActivityAt: now,
+      viewerCount: 0,
+    });
+    return { canvasId, created: true };
   },
 });
 
