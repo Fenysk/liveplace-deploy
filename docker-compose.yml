@@ -114,12 +114,15 @@ services:
       # kept explicit so the security-sensitive wiring is auditable here.
       - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
     depends_on:
+      # FEN-93: the gateway is the PUBLIC WS hot path and is Redis-only (FEN-50);
+      # its sole Convex use (gauge bonus) degrades to 0 when Convex is absent. So
+      # it must NOT gate on the convex chain — otherwise an unhealthy convex-backend
+      # blocks convex-admin-key → convex-deploy → gateway → proxy and the WHOLE
+      # public stack 404s (observed: full-stack deploy failed, app "not running",
+      # every endpoint 404, while the anon stack — no convex gate — came up fine).
+      # Depend only on redis; convex/worker converge independently for persistence.
       redis:
         condition: service_healthy
-      convex-backend:
-        condition: service_healthy
-      convex-deploy:
-        condition: service_completed_successfully
     healthcheck:
       # node:22-alpine ships busybox wget. The gateway answers 200 on any GET.
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
@@ -149,12 +152,15 @@ services:
       # security-sensitive wiring is auditable here (mirrors the gateway).
       - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
     depends_on:
+      # FEN-93: gate on a reachable backend (convex-backend healthy) but NOT on the
+      # convex-deploy one-shot — the worker tolerates undeployed Convex at startup
+      # (FEN-80) and `restart: unless-stopped` retries until functions are live. So
+      # the worker never blocks the public stack; if convex-backend never goes
+      # healthy, only the worker stays down (persistence off), not gateway/web/proxy.
       redis:
         condition: service_healthy
       convex-backend:
         condition: service_healthy
-      convex-deploy:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   web:
@@ -199,9 +205,12 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
+      # FEN-93: only web + gateway (both Redis-only fast starts). NOT convex-backend
+      # — Caddy's /convex + /api/auth routes simply 502 while Convex converges, but
+      # the public site + WS path must serve regardless (decoupled from the convex
+      # chain so an unhealthy convex-backend can't 404 the whole stack).
       - web
       - gateway
-      - convex-backend
     restart: unless-stopped
 
 volumes:
