@@ -9,7 +9,9 @@ It is the binary that joins the two ends built earlier:
 
 - **Redis source** — `place.lua` XADDs every accepted placement to
   `canvas:{slug}:stream` as `{x,y,color,version,userId,ts}` (FEN-54, ADR-0003).
-- **Convex target** — the slug-addressed `worker:*` API (FEN-47).
+- **Convex target** — the slug-addressed `worker:*` API (FEN-47). These functions
+  are `internal*` (FEN-86): the worker reaches them only through the public,
+  secret-guarded `worker:run` action (see Config → `GATEWAY_INTERNAL_SECRET`).
 - **Contract** — [`docs/contracts/persistence-worker.md`](../../docs/contracts/persistence-worker.md)
   and [`docs/adr/0003-redis-hot-path-per-canvas-stream.md`](../../docs/adr/0003-redis-hot-path-per-canvas-stream.md).
 
@@ -54,7 +56,8 @@ All three MUST be the same value for a deployment.
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `CONVEX_SELF_HOSTED_URL` | `http://localhost:3210` | Self-hosted Convex backend (public `worker:*` fns) |
+| `CONVEX_SELF_HOSTED_URL` | `http://localhost:3210` | Self-hosted Convex backend (calls the `worker:run` action) |
+| `GATEWAY_INTERNAL_SECRET` | _(unset)_ | Shared secret authenticating the worker to the `worker:run` action (FEN-86). MUST equal the value `deploy.sh` seeds into the Convex deployment (same secret as the F8 moderation seam). Unset ⇒ durable Convex calls are rejected (tolerated like undeployed Convex). |
 | `GATEWAY_CANVAS_ID` | `default` | Canvas slug == key namespace == drain target |
 | `CANVAS_WIDTH` / `CANVAS_HEIGHT` | `512` / `512` | Geometry fallback (the durable row wins when readable) |
 | `FLUSH_INTERVAL_MS` | `2000` | Drain cadence |
@@ -89,6 +92,7 @@ worker:
     REDIS_URL: redis://redis:6379
     CONVEX_SELF_HOSTED_URL: http://convex-backend:3210
     GATEWAY_CANVAS_ID: ${GATEWAY_CANVAS_ID}   # MUST equal the gateway + F2 slug
+    GATEWAY_INTERNAL_SECRET: ${GATEWAY_INTERNAL_SECRET}  # FEN-86: == Convex deployment secret
   depends_on: [redis, convex-backend]
   restart: unless-stopped
 ```

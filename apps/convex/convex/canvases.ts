@@ -7,7 +7,7 @@
  * the handlers below are thin I/O wrappers that also enforce ownership and the
  * "one active canvas per owner" invariant.
  */
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -318,9 +318,10 @@ export const setPlacementOpen = mutation({
  *
  * The worker addresses the row by its WS `canvasId`, which ADR-0001 fixes equal
  * to the F2 `slug` (enforced by `GATEWAY_CANVAS_ID`); we resolve it via the
- * `by_slug` index. Public (no `ctx.auth`): the worker is a trusted backend
- * service calling over the self-hosted Convex, like the other `flush`/`canvas`
- * worker-support functions.
+ * `by_slug` index. `internalMutation` (FEN-86): only the trusted worker reaches
+ * it, via the secret-guarded `worker:run` action — NOT the public `/convex/*`
+ * route. (Was public `mutation`; that let anyone spoof viewerCount/lastActivityAt
+ * for gallery-ranking manipulation and point the thumbnail at an attacker blob.)
  *
  * Ownership boundary: if no row matches the slug yet, this is a **no-op**, never
  * a create — F2 `createCanvas` is the sole creator of canvas rows. The merge is
@@ -328,7 +329,7 @@ export const setPlacementOpen = mutation({
  * redelivered flushes can't regress gallery state; a superseded thumbnail blob
  * is freed from storage.
  */
-export const setGalleryFields = mutation({
+export const setGalleryFields = internalMutation({
   args: {
     slug: v.string(),
     lastActivityAt: v.optional(v.number()),

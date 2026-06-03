@@ -4,10 +4,17 @@
  * The persistence worker is a trusted backend service: it drains the Redis
  * placement stream to Convex in idempotent batches, periodically writes a binary
  * snapshot blob, and restores Redis from durable storage on cold start. These
- * functions are its durable seam. They are PUBLIC (no `ctx.auth`) like the other
- * worker-support functions — the self-hosted Convex is reachable only by trusted
- * services — and OFF the hot path (G-A1: no DB write happens during a pixel
- * placement; the gateway only touches Redis).
+ * functions are its durable seam, and OFF the hot path (G-A1: no DB write happens
+ * during a pixel placement; the gateway only touches Redis).
+ *
+ * Trust boundary (FEN-86, security): these are `internal*` functions — NOT
+ * reachable from the public `/convex/*` route a browser uses. The worker reaches
+ * them ONLY through the single public `run` action at the bottom of this file,
+ * which authenticates the caller against the shared `GATEWAY_INTERNAL_SECRET`
+ * before dispatching. They were previously exported `mutation`/`query`, i.e.
+ * callable by anyone on the internet (forged points/placements, mined upload
+ * URLs, leaked placement log); the audit on 2026-06-03 flagged that and this
+ * closes it.
  *
  * ADR-0001 (two-master reconciliation): the worker addresses a canvas by its WS
  * `canvasId`, which is fixed equal to the F2 `slug` (enforced operationally by
@@ -22,7 +29,8 @@
  * mutation is a **no-op** — `canvases:createCanvas` is the sole creator of canvas
  * rows; the worker never manufactures a partial canvas. Reads return null/[].
  */
-import { mutation, query } from "./_generated/server";
+import { action, internalMutation, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
@@ -54,7 +62,7 @@ async function resolveCanvasId(ctx: QueryCtx, slug: string): Promise<Id<"canvase
  * log inside this single transaction. Gallery `lastActivityAt` is advanced
  * separately by the worker off the newest placement ts (`canvases:setGalleryFields`).
  */
-export const applyFlush = mutation({
+export const applyFlush = internalMutation({
   args: {
     slug: v.string(),
     lastStreamId: v.string(),
@@ -133,7 +141,7 @@ export const applyFlush = mutation({
  * stamp `lastSnapshotAt` on the canvas row. Append-only on `snapshots`; the
  * latest is read back on cold-start restore. `lastSnapshotAt` only advances.
  */
-export const recordSnapshot = mutation({
+export const recordSnapshot = internalMutation({
   args: {
     slug: v.string(),
     version: v.number(),
@@ -163,7 +171,7 @@ export const recordSnapshot = mutation({
 });
 
 /** Short-lived upload URL for storing a snapshot blob in Convex file storage. */
-export const generateUploadUrl = mutation({
+export const generateUploadUrl = internalMutation({
   args: {},
   returns: v.string(),
   handler: (ctx) => ctx.storage.generateUploadUrl(),
@@ -179,7 +187,7 @@ export const generateUploadUrl = mutation({
  * — it is canvas/Redis config the gateway owns — so it is intentionally absent
  * here. Returns null if the slug has no canvas row.
  */
-export const getCanvasDurable = query({
+export const getCanvasDurable = internalQuery({
   args: { slug: v.string() },
   returns: v.union(
     v.object({
@@ -214,7 +222,7 @@ export const getCanvasDurable = query({
  * The worker seeds Redis from it on cold start before replaying newer placements.
  * Returns null if the canvas (or its snapshot) is absent.
  */
-export const getLatestSnapshot = query({
+export const getLatestSnapshot = internalQuery({
   args: { slug: v.string() },
   returns: v.union(
     v.object({
@@ -244,7 +252,7 @@ export const getLatestSnapshot = query({
  * bounded by `limit` (clamped to [1, 10000]). Used to replay the tail past the
  * latest snapshot during restore; the caller pages by advancing `afterVersion`.
  */
-export const getPlacementsSince = query({
+export const getPlacementsSince = internalQuery({
   args: {
     slug: v.string(),
     afterVersion: v.number(),
@@ -264,7 +272,7 @@ export const getPlacementsSince = query({
 });
 
 /** Flush bookkeeping for a canvas (resume cursor); null if never flushed. */
-export const getFlushState = query({
+export const getFlushState = internalQuery({
   args: { slug: v.string() },
   returns: v.union(
     v.object({
@@ -287,5 +295,64 @@ export const getFlushState = query({
       lastFlushedVersion: state.lastFlushedVersion,
       updatedAt: state.updatedAt,
     };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trusted worker RPC seam (FEN-86).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Constant-time string compare (length leak only) so the secret check below
+ * doesn't short-circuit on the first differing byte. */
+function secretsMatch(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * The persistence worker's single entry point into the durable seam (FEN-86).
+ *
+ * Why an action (and not a public deploy/admin key on the worker's
+ * `ConvexHttpClient`, nor a `.site` httpAction): this keeps the worker on the
+ * exact client + `CONVEX_SELF_HOSTED_URL` it already uses (no new networking, no
+ * over-broad admin key in the worker container, no reliance on the untyped
+ * private `setAdminAuth`). The action is callable from the public `/convex/*`
+ * route, but is **inert without the shared secret** (`GATEWAY_INTERNAL_SECRET`):
+ * it authenticates, then forwards to the `internal*` worker/canvases functions
+ * via `ctx.runMutation`/`ctx.runQuery`. Those functions keep their own strict
+ * arg validators, which run on dispatch, so `args: v.any()` here is not a hole.
+ *
+ * OFF the hot path (worker drain loop, ~every 2s) — the extra action→function
+ * hop costs nothing the gateway/players can feel.
+ */
+export const run = action({
+  args: { secret: v.string(), fn: v.string(), args: v.any() },
+  handler: async (ctx, a): Promise<unknown> => {
+    const expected = process.env.GATEWAY_INTERNAL_SECRET;
+    if (!expected || !secretsMatch(a.secret, expected)) {
+      throw new Error("worker:run unauthorized");
+    }
+    switch (a.fn) {
+      case "applyFlush":
+        return ctx.runMutation(internal.worker.applyFlush, a.args);
+      case "recordSnapshot":
+        return ctx.runMutation(internal.worker.recordSnapshot, a.args);
+      case "generateUploadUrl":
+        return ctx.runMutation(internal.worker.generateUploadUrl, {});
+      case "setGalleryFields":
+        return ctx.runMutation(internal.canvases.setGalleryFields, a.args);
+      case "getCanvasDurable":
+        return ctx.runQuery(internal.worker.getCanvasDurable, a.args);
+      case "getLatestSnapshot":
+        return ctx.runQuery(internal.worker.getLatestSnapshot, a.args);
+      case "getPlacementsSince":
+        return ctx.runQuery(internal.worker.getPlacementsSince, a.args);
+      case "getFlushState":
+        return ctx.runQuery(internal.worker.getFlushState, a.args);
+      default:
+        throw new Error(`worker:run unknown fn: ${String(a.fn)}`);
+    }
   },
 });

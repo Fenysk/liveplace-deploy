@@ -20,8 +20,15 @@ function num(name: string, fallback: number): number {
 
 export interface WorkerConfig {
   redisUrl: string;
-  /** Self-hosted Convex backend URL (worker calls the public `worker:*` fns). */
+  /** Self-hosted Convex backend URL (worker calls the `worker:run` action). */
   convexUrl: string;
+  /**
+   * Shared secret authenticating the worker to the `worker:run` Convex action
+   * (FEN-86). MUST match `GATEWAY_INTERNAL_SECRET` set on the Convex deployment.
+   * Empty in anonymous bootstrap (Convex undeployed) — calls then fail and are
+   * tolerated per-tick like any other Convex error.
+   */
+  internalSecret: string;
   /**
    * Canvas slug == `GATEWAY_CANVAS_ID` == per-canvas key namespace. Falls back to
    * DEFAULT_CANVAS_ID for local single-canvas smoke (ADR-0003).
@@ -48,6 +55,7 @@ export function loadConfig(): WorkerConfig {
   return {
     redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
     convexUrl: process.env.CONVEX_SELF_HOSTED_URL ?? "http://localhost:3210",
+    internalSecret: process.env.GATEWAY_INTERNAL_SECRET ?? "",
     slug: process.env.GATEWAY_CANVAS_ID || DEFAULT_CANVAS_ID,
     width: num("CANVAS_WIDTH", CANVAS_WIDTH),
     height: num("CANVAS_HEIGHT", CANVAS_HEIGHT),

@@ -33,9 +33,15 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const token = `${hostname()}-${process.pid}`;
   const redis = createRedis(cfg.redisUrl);
-  const convex = new ConvexDurable(cfg.convexUrl);
+  const convex = new ConvexDurable(cfg.convexUrl, cfg.internalSecret);
 
   log("starting", { slug: cfg.slug, convex: cfg.convexUrl, flushMs: cfg.flushIntervalMs });
+  if (!cfg.internalSecret) {
+    // FEN-86: without the shared secret the secret-guarded worker:run action
+    // rejects us. Fine in anonymous bootstrap (Convex undeployed); a deployed
+    // Convex needs GATEWAY_INTERNAL_SECRET set on BOTH this worker and Convex.
+    log("GATEWAY_INTERNAL_SECRET unset — durable Convex calls will be rejected until configured");
+  }
 
   // Geometry: prefer the durable canvas row; fall back to env for a slug whose
   // row isn't readable yet (the drain itself no-ops until the row exists).

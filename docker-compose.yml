@@ -100,6 +100,12 @@ services:
       - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
       # ADR-0001: the worker's canvas slug MUST equal the gateway's. Both read the
       # single GATEWAY_CANVAS_ID from the shared .env, so they match by construction.
+      # FEN-86: authenticates the worker to the `worker:run` Convex action that
+      # fronts the now-internal worker:* / canvases:setGalleryFields seam. Same
+      # secret deploy.sh already seeds into the Convex deployment for the F8
+      # moderation seam. Also flows via env_file; kept explicit so the
+      # security-sensitive wiring is auditable here (mirrors the gateway).
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
     depends_on:
       redis:
         condition: service_healthy

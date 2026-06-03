@@ -1,12 +1,15 @@
 /**
  * Typed seam over the durable Convex API (`apps/convex/convex/worker.ts`,
- * FEN-47). Every function is PUBLIC (no `ctx.auth`) and **slug-addressed** — its
- * args take the canvas `slug`, never a string `canvasId` — because the
- * self-hosted backend is reachable only by trusted services and resolves the F2
- * `id("canvases")` itself via `canvases.by_slug` (ADR-0001).
+ * FEN-47). Operations are **slug-addressed** — args take the canvas `slug`, never
+ * a string `canvasId` — because the backend resolves the F2 `id("canvases")`
+ * itself via `canvases.by_slug` (ADR-0001).
  *
- * Functions are referenced by name through `makeFunctionReference`, so the worker
- * needs no cross-app `_generated` codegen.
+ * Trust seam (FEN-86): the underlying `worker:*` / `canvases:setGalleryFields`
+ * functions are `internal*` (NOT publicly callable). Every call here goes through
+ * the single public `worker:run` action, passing the shared `internalSecret`
+ * (`GATEWAY_INTERNAL_SECRET`); the action authenticates then dispatches to the
+ * internal function. This stays on the same `ConvexHttpClient` + URL, so it needs
+ * no admin/deploy key and no cross-app `_generated` codegen.
  */
 import { ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
@@ -50,52 +53,16 @@ export interface ApplyFlushResult {
   inserted: number;
 }
 
-const fns = {
-  applyFlush: makeFunctionReference<
-    "mutation",
-    { slug: string; lastStreamId: string; placements: PlacementRecord[]; now: number },
-    ApplyFlushResult
-  >("worker:applyFlush"),
-  recordSnapshot: makeFunctionReference<
-    "mutation",
-    { slug: string; version: number; storageId: string; bytes: number; now: number },
-    { canvasFound: boolean }
-  >("worker:recordSnapshot"),
-  generateUploadUrl: makeFunctionReference<"mutation", Record<string, never>, string>(
-    "worker:generateUploadUrl",
-  ),
-  getCanvasDurable: makeFunctionReference<"query", { slug: string }, CanvasDurable | null>(
-    "worker:getCanvasDurable",
-  ),
-  getLatestSnapshot: makeFunctionReference<"query", { slug: string }, LatestSnapshot | null>(
-    "worker:getLatestSnapshot",
-  ),
-  getPlacementsSince: makeFunctionReference<
-    "query",
-    { slug: string; afterVersion: number; limit: number },
-    Array<PlacementRecord & { canvasId: string }>
-  >("worker:getPlacementsSince"),
-  getFlushState: makeFunctionReference<"query", { slug: string }, FlushStateRow | null>(
-    "worker:getFlushState",
-  ),
-  /**
-   * F12 gallery discovery fields, written onto the F2 `canvases` row OFF the hot
-   * path (FEN-33, ADR-0001). Addressed by `slug`; server-side merge is idempotent
-   * + monotonic (`lastActivityAt` / `thumbnailVersion` never regress) and a slug
-   * with no F2 row is a no-op. Lives in the `canvases` module, not `worker`.
-   */
-  setGalleryFields: makeFunctionReference<
-    "mutation",
-    {
-      slug: string;
-      lastActivityAt?: number;
-      viewerCount?: number;
-      thumbnailStorageId?: string;
-      thumbnailVersion?: number;
-    },
-    { updated: boolean }
-  >("canvases:setGalleryFields"),
-} as const;
+/**
+ * The single public dispatch action (FEN-86). `fn` selects the internal worker
+ * function; `args` is its arg object (validated server-side by that function).
+ * `secret` must match the Convex deployment's `GATEWAY_INTERNAL_SECRET`.
+ */
+const runAction = makeFunctionReference<
+  "action",
+  { secret: string; fn: string; args: unknown },
+  unknown
+>("worker:run");
 
 /** Convert a parsed Redis stream record into the Convex placement shape. */
 export function toPlacementRecord(r: PlacementStreamRecord): PlacementRecord {
@@ -113,22 +80,33 @@ export function toPlacementRecord(r: PlacementStreamRecord): PlacementRecord {
 
 export class ConvexDurable {
   private readonly client: ConvexHttpClient;
+  private readonly secret: string;
 
-  constructor(url: string) {
+  constructor(url: string, secret: string) {
     // Self-hosted backend URL won't match *.convex.cloud — skip the check.
     this.client = new ConvexHttpClient(url, { skipConvexDeploymentUrlCheck: true });
+    this.secret = secret;
+  }
+
+  /**
+   * Invoke an internal worker function through the secret-guarded `worker:run`
+   * action (FEN-86). The result type is asserted by the caller; the server-side
+   * function still validates `args` strictly.
+   */
+  private call<T>(fn: string, args: unknown): Promise<T> {
+    return this.client.action(runAction, { secret: this.secret, fn, args }) as Promise<T>;
   }
 
   getCanvasDurable(slug: string): Promise<CanvasDurable | null> {
-    return this.client.query(fns.getCanvasDurable, { slug });
+    return this.call("getCanvasDurable", { slug });
   }
 
   getFlushState(slug: string): Promise<FlushStateRow | null> {
-    return this.client.query(fns.getFlushState, { slug });
+    return this.call("getFlushState", { slug });
   }
 
   getLatestSnapshot(slug: string): Promise<LatestSnapshot | null> {
-    return this.client.query(fns.getLatestSnapshot, { slug });
+    return this.call("getLatestSnapshot", { slug });
   }
 
   getPlacementsSince(
@@ -136,7 +114,7 @@ export class ConvexDurable {
     afterVersion: number,
     limit: number,
   ): Promise<Array<PlacementRecord & { canvasId: string }>> {
-    return this.client.query(fns.getPlacementsSince, { slug, afterVersion, limit });
+    return this.call("getPlacementsSince", { slug, afterVersion, limit });
   }
 
   applyFlush(
@@ -145,7 +123,7 @@ export class ConvexDurable {
     placements: PlacementRecord[],
     now: number,
   ): Promise<ApplyFlushResult> {
-    return this.client.mutation(fns.applyFlush, { slug, lastStreamId, placements, now });
+    return this.call("applyFlush", { slug, lastStreamId, placements, now });
   }
 
   /** Upload a snapshot blob to Convex file storage and record it durably. */
@@ -155,7 +133,7 @@ export class ConvexDurable {
     bytes: Uint8Array,
     now: number,
   ): Promise<{ canvasFound: boolean }> {
-    const uploadUrl = await this.client.mutation(fns.generateUploadUrl, {});
+    const uploadUrl = await this.call<string>("generateUploadUrl", {});
     const res = await fetch(uploadUrl, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
@@ -165,7 +143,7 @@ export class ConvexDurable {
       throw new Error(`snapshot upload failed: ${res.status} ${res.statusText}`);
     }
     const { storageId } = (await res.json()) as { storageId: string };
-    return this.client.mutation(fns.recordSnapshot, {
+    return this.call("recordSnapshot", {
       slug,
       version,
       storageId,
@@ -188,7 +166,7 @@ export class ConvexDurable {
       thumbnailVersion?: number;
     },
   ): Promise<{ updated: boolean }> {
-    return this.client.mutation(fns.setGalleryFields, { slug, ...fields });
+    return this.call("setGalleryFields", { slug, ...fields });
   }
 
   /**
@@ -203,7 +181,7 @@ export class ConvexDurable {
     version: number,
     image: { buffer: Uint8Array; format: string; width: number; height: number },
   ): Promise<{ updated: boolean }> {
-    const uploadUrl = await this.client.mutation(fns.generateUploadUrl, {});
+    const uploadUrl = await this.call<string>("generateUploadUrl", {});
     const contentType = image.format === "webp" ? "image/webp" : "image/png";
     const res = await fetch(uploadUrl, {
       method: "POST",
