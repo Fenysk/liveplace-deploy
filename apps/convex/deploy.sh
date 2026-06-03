@@ -88,3 +88,21 @@ else
   echo "[convex-deploy] no deployment env to seed"
 fi
 rm -f "$ENV_TMP"
+
+# 3) Seed the durable canvas row for the deployed slug (FEN-94). The worker seam
+#    (applyFlush / setGalleryFields / recordSnapshot) is a no-op until a
+#    `canvases` row exists (ADR-0001), and in anonymous mode (GATEWAY_AUTH_DISABLED=1)
+#    there is no Twitch identity to run the public `createCanvas`. This privileged
+#    one-shot (admin key already exported above) calls the idempotent internal
+#    `canvases:ensureDefaultCanvas`, so the drain/restore + gallery path can be
+#    exercised end-to-end (unblocks the FEN-89 live smoke). Geometry mirrors the
+#    deployed gateway/Redis dims so `getCanvasDurable` restores the right bitmap.
+#    Soft-fail: a failed seed must not gate the stack (service_completed_successfully).
+SEED_SLUG="${GATEWAY_CANVAS_ID:-default}"
+SEED_W="${CANVAS_WIDTH:-512}"
+SEED_H="${CANVAS_HEIGHT:-512}"
+echo "[convex-deploy] seed canvas row: slug=$SEED_SLUG ${SEED_W}x${SEED_H} (idempotent)"
+if ! pnpm exec convex run canvases:ensureDefaultCanvas \
+  "{\"slug\":\"$SEED_SLUG\",\"width\":$SEED_W,\"height\":$SEED_H}"; then
+  echo "[convex-deploy] WARNING: ensureDefaultCanvas seed failed — drain/restore will no-op until a canvas row exists."
+fi
