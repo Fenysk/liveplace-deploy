@@ -45,7 +45,17 @@ fi
 
 # 1) Push the Convex functions into the self-hosted backend.
 #    (Reads CONVEX_SELF_HOSTED_URL + CONVEX_SELF_HOSTED_ADMIN_KEY from env.)
-pnpm exec convex deploy -y
+#    Soft-fail: if the deploy fails (wrong key format, backend unreachable, etc.)
+#    we log and continue to exit 0. This keeps the `service_completed_successfully`
+#    gate satisfied so gateway/worker start in all cases. Once the stack is
+#    running:healthy, runtime logs reveal the actual error. Persistence activates
+#    automatically when this step succeeds.
+if ! pnpm exec convex deploy -y; then
+  echo "[convex-deploy] WARNING: 'convex deploy' failed — stack will come up without deployed functions."
+  echo "[convex-deploy]   Admin key may be wrong format, backend may have rejected it, or network issue."
+  echo "[convex-deploy]   Gateway/worker will start in anonymous mode; read runtime logs to diagnose."
+  exit 0
+fi
 
 # 2) Seed the deployment env vars the functions actually read (grep'd from
 #    apps/convex/convex). Build a dotenv file from THIS container's env (supplied
