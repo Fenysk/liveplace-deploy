@@ -13,11 +13,24 @@ set -eu
 
 cd /app/apps/convex
 
-# 0) Bootstrap/anonymous mode: the self-hosted admin key is minted on-box, one
+# 0a) Pick up the admin key minted in-stack by the `convex-admin-key` one-shot
+#     (FEN-92), which writes it to the shared /admin volume. An explicit
+#     CONVEX_SELF_HOSTED_ADMIN_KEY from the environment still wins. This is what
+#     makes persistence agent-only: no manual `generate_admin_key.sh` terminal.
+if [ -z "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ] && [ -r /admin/admin_key ]; then
+  CONVEX_SELF_HOSTED_ADMIN_KEY="$(cat /admin/admin_key 2>/dev/null || true)"
+  export CONVEX_SELF_HOSTED_ADMIN_KEY
+  if [ -n "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ]; then
+    echo "[convex-deploy] loaded admin key from /admin/admin_key (minted in-stack by convex-admin-key)"
+  fi
+fi
+
+# 0b) Bootstrap/anonymous mode: the self-hosted admin key is minted on-box, one
 #    time, from CONVEX_INSTANCE_SECRET (`generate_admin_key.sh` in the
-#    convex-backend container). Until it is provided, `convex deploy` cannot
-#    authenticate. Rather than hard-fail the one-shot — which gates gateway/worker
-#    via `service_completed_successfully` and so fails the WHOLE stack — we SKIP
+#    convex-backend container — now automated via the convex-admin-key service).
+#    If it is STILL unavailable, `convex deploy` cannot authenticate. Rather than
+#    hard-fail the one-shot — which gates gateway/worker via
+#    `service_completed_successfully` and so fails the WHOLE stack — we SKIP
 #    cleanly and exit 0. The Redis-only hot path (place/ack/broadcast) and the
 #    anonymous WS smoke do not need deployed functions; the gateway's only Convex
 #    use (gauge bonus) degrades to 0. Persistence + functions activate the moment

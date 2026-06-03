@@ -288,6 +288,18 @@ async function resolveApp(api, c) {
       die(`GUARDRAIL: app ${c.appUuid} belongs to project ${appProject}, not ${c.projectUuid}. Refusing to redeploy it.`);
     }
     log(`· reusing app ${c.appUuid} (${app.name ?? c.appName})`);
+    // Self-correct the compose path on reuse. FEN-80 pivoted this app to the
+    // minimal anon compose; FEN-92 brings the full stack back. Without this PATCH
+    // a reused app would keep deploying whatever compose it was last set to.
+    const currentLoc = app.docker_compose_location ?? app.data?.docker_compose_location;
+    if (c.composeLocation && currentLoc && currentLoc !== c.composeLocation) {
+      try {
+        await api("PATCH", `/applications/${c.appUuid}`, { docker_compose_location: c.composeLocation });
+        log(`· set docker_compose_location: ${currentLoc} → ${c.composeLocation}`);
+      } catch (err) {
+        log(`  (warning: could not PATCH docker_compose_location to ${c.composeLocation}: ${err.message})`);
+      }
+    }
     return c.appUuid;
   }
   if (!c.gitRepository) die("COOLIFY_GIT_REPOSITORY required to create the app (or set COOLIFY_APP_UUID to reuse one).");
@@ -485,8 +497,13 @@ async function main() {
   // Hard checks that matter even in dry-run (catch provisioning gaps early).
   const missing = [];
   if (!c.publicBaseUrl) missing.push("PUBLIC_BASE_URL (or accept Coolify autogenerate — VITE_* build args need it)");
+  // CONVEX_SELF_HOSTED_ADMIN_KEY is no longer a required input (FEN-92): the
+  // `convex-admin-key` one-shot in docker-compose.yml mints it in-stack from
+  // CONVEX_INSTANCE_SECRET, so leaving it empty here is the expected, supported
+  // path. We deliberately DON'T set it in Coolify env — letting the stack mint it
+  // keeps key↔instance-secret coherence automatic across redeploys.
   if (!stack.CONVEX_SELF_HOSTED_ADMIN_KEY)
-    missing.push("CONVEX_SELF_HOSTED_ADMIN_KEY (one-time: mint via `generate_admin_key.sh` in the convex-backend container)");
+    log("· CONVEX_SELF_HOSTED_ADMIN_KEY empty → minted in-stack by the convex-admin-key one-shot (persistence enabled).");
   // The admin key is bound to the instance secret it was minted from. If a key
   // is supplied but the secret was just auto-generated, they will not match and
   // convex-deploy auth fails — which gates the whole stack. Catch it loudly.

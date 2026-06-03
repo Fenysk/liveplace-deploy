@@ -42,11 +42,78 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # One-shot: mint the self-hosted Convex admin key WITHOUT a manual terminal
+  # (FEN-92). The admin key is a deterministic function of (INSTANCE_NAME,
+  # INSTANCE_SECRET) — the backend validates any key minted from the same
+  # INSTANCE_SECRET it runs with. So we run `generate_admin_key.sh` (baked into
+  # the convex-backend image; same script the docs invoke via `docker compose
+  # exec backend ./generate_admin_key.sh`) from a throwaway container that shares
+  # INSTANCE_NAME + INSTANCE_SECRET with convex-backend, and write the key to a
+  # shared volume for convex-deploy to consume. This removes the only manual,
+  # not-yet-automated step in the bring-up: no Coolify exec / UI terminal needed.
+  #
+  # ALWAYS exits 0: if the key cannot be minted (script moved in a future image,
+  # etc.) the stack must still come up in anonymous/bootstrap mode rather than
+  # hard-failing `up` (gateway/worker gate on convex-deploy completing). A missing
+  # key then degrades to "no persistence", which is observable, not a dead stack.
+  convex-admin-key:
+    image: ghcr.io/get-convex/convex-backend:latest
+    env_file: [.env]
+    environment:
+      # MUST match convex-backend exactly — the key embeds the instance name and
+      # is signed with the instance secret; a mismatch makes the backend reject it.
+      - INSTANCE_NAME=twitch-canvas
+      - INSTANCE_SECRET=${CONVEX_INSTANCE_SECRET}
+    volumes:
+      - convex-admin:/admin
+    # NOTE: every shell `$` is written `$$` so docker-compose passes it through
+    # literally instead of interpolating it at parse time (compose would otherwise
+    # blank out $$KEYFILE/$$SCRIPT/etc. before the container runs).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        KEYFILE=/admin/admin_key
+        # An operator-supplied key (rare) wins and is just forwarded.
+        if [ -n "$${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ]; then
+          printf '%s' "$$CONVEX_SELF_HOSTED_ADMIN_KEY" > "$$KEYFILE"
+          echo "[convex-admin-key] forwarded operator-supplied CONVEX_SELF_HOSTED_ADMIN_KEY"
+          exit 0
+        fi
+        # Locate the minting script (image WORKDIR is preserved under the override).
+        SCRIPT=""
+        for p in ./generate_admin_key.sh /generate_admin_key.sh /convex/generate_admin_key.sh \
+                 "$$(command -v generate_admin_key.sh 2>/dev/null || true)"; do
+          [ -n "$$p" ] && [ -x "$$p" ] && SCRIPT="$$p" && break
+        done
+        if [ -z "$$SCRIPT" ]; then
+          echo "[convex-admin-key] generate_admin_key.sh not found in image — leaving key unset (anonymous mode)"
+          : > "$$KEYFILE"; exit 0
+        fi
+        # The script reads INSTANCE_NAME/INSTANCE_SECRET from env; pass them as args
+        # too for image variants that expect positional args. It may print a header
+        # line, so extract the actual key: <instance_name>|<hex...>.
+        OUT="$$("$$SCRIPT" 2>/dev/null || "$$SCRIPT" "$$INSTANCE_NAME" "$$INSTANCE_SECRET" 2>/dev/null || true)"
+        KEY="$$(printf '%s\n' "$$OUT" | grep -E '^[A-Za-z0-9_-]+\|' | tail -n1)"
+        [ -n "$$KEY" ] || KEY="$$(printf '%s\n' "$$OUT" | grep -E '\|' | tail -n1)"
+        if [ -z "$$KEY" ]; then
+          echo "[convex-admin-key] mint produced no key — leaving unset (anonymous mode). raw: $$OUT"
+          : > "$$KEYFILE"; exit 0
+        fi
+        printf '%s' "$$KEY" > "$$KEYFILE"
+        echo "[convex-admin-key] minted admin key -> $$KEYFILE ($$(wc -c < "$$KEYFILE") bytes)"
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    restart: "no"
+
   # One-shot: deploy the Convex functions into the self-hosted backend, then seed
   # the deployment env vars they read (incl. the F8 GATEWAY_INTERNAL_* seam — see
   # apps/convex/deploy.sh), then exit. Self-hosted Convex keeps function env IN
   # the deployment, so env_file alone never reaches process.env; deploy.sh pushes
   # it. Everything that talks to Convex depends on this completing successfully.
+  # Reads the admin key minted by convex-admin-key from the shared volume when no
+  # CONVEX_SELF_HOSTED_ADMIN_KEY is supplied (FEN-92).
   convex-deploy:
     build:
       context: .
@@ -54,9 +121,13 @@ services:
     env_file: [.env]
     environment:
       - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+    volumes:
+      - convex-admin:/admin:ro
     depends_on:
       convex-backend:
         condition: service_healthy
+      convex-admin-key:
+        condition: service_completed_successfully
     restart: "no"
 
   gateway:
@@ -164,5 +235,9 @@ services:
 volumes:
   redis-data:
   convex-data:
+  # Holds the in-stack-minted Convex admin key (FEN-92): convex-admin-key writes
+  # it, convex-deploy reads it. Not a secret store the operator manages — the key
+  # is re-derivable from CONVEX_INSTANCE_SECRET on every deploy.
+  convex-admin:
   caddy-data:
   caddy-config:
