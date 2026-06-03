@@ -62,7 +62,12 @@ services:
     restart: unless-stopped
 
   proxy:
-    image: caddy:2-alpine
+    # Caddyfile is BAKED into the image (infra/proxy/Dockerfile) — a bind-mount of
+    # ./infra/Caddyfile fails on Coolify (daemon auto-creates the missing host
+    # source as a dir → "mount a directory onto a file" → `up` aborts, FEN-80).
+    build:
+      context: .
+      dockerfile: infra/proxy/Dockerfile
     environment:
       - SITE_ADDRESS=${SITE_ADDRESS:-:80}
     # NO host port publishing on Coolify: its Traefik edge routes the bound domain
@@ -74,7 +79,6 @@ services:
     expose:
       - "80"
     volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

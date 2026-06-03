@@ -135,7 +135,13 @@ services:
   # TLS reverse proxy. Routes /ws -> gateway, /api/auth -> convex site origin
   # (Twitch callback), /convex -> convex cloud origin, everything else -> web.
   proxy:
-    image: caddy:2-alpine
+    # Caddyfile is BAKED into the image (infra/proxy/Dockerfile). A bind-mount of
+    # ./infra/Caddyfile fails on Coolify (host-source auto-created as a dir →
+    # "mount a directory onto a file", FEN-80); baking is reproducible everywhere
+    # incl. the NAS. Build context = repo root so `infra/Caddyfile` resolves.
+    build:
+      context: .
+      dockerfile: infra/proxy/Dockerfile
     environment:
       # Site address decides scheme/port inside Caddy (see infra/Caddyfile).
       # Default ':80' = reliable HTTP-only on all hosts (FEN-78 #4).
@@ -147,7 +153,6 @@ services:
       - "${PROXY_HTTP_PORT:-80}:80"
       - "${PROXY_HTTPS_PORT:-443}:443"
     volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
