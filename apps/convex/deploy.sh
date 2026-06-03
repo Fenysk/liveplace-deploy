@@ -102,7 +102,18 @@ do
 done
 
 if [ -s "$ENV_TMP" ]; then
-  pnpm exec convex env set --from-file "$ENV_TMP"
+  # FEN-98: soft-fail the bulk seed. Under `set -eu` an unguarded non-zero here
+  # ABORTS the whole script before the instrument (2a) and the individual
+  # BETTER_AUTH_SECRET re-seed (2b) can run — observed live: 6 vars seeded but
+  # `diag.authEnvStatus.seedReport` came back null and BETTER_AUTH_SECRET stayed
+  # DEFAULT, i.e. the script died right here. `convex env set --from-file` can
+  # exit non-zero even after writing some vars (e.g. it rejects one key), so a
+  # single bad entry must NOT prevent the per-var re-seed + the diagnostic from
+  # running. Same soft-fail philosophy already applied to `convex deploy` above.
+  if ! pnpm exec convex env set --from-file "$ENV_TMP"; then
+    echo "[convex-deploy] WARNING: bulk 'convex env set --from-file' returned non-zero"
+    echo "[convex-deploy]   — continuing to the per-var re-seed + DIAG_SEED_REPORT instrument below."
+  fi
 else
   echo "[convex-deploy] no deployment env to seed"
 fi
