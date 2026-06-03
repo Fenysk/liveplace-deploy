@@ -13,6 +13,23 @@ set -eu
 
 cd /app/apps/convex
 
+# 0) Bootstrap/anonymous mode: the self-hosted admin key is minted on-box, one
+#    time, from CONVEX_INSTANCE_SECRET (`generate_admin_key.sh` in the
+#    convex-backend container). Until it is provided, `convex deploy` cannot
+#    authenticate. Rather than hard-fail the one-shot — which gates gateway/worker
+#    via `service_completed_successfully` and so fails the WHOLE stack — we SKIP
+#    cleanly and exit 0. The Redis-only hot path (place/ack/broadcast) and the
+#    anonymous WS smoke do not need deployed functions; the gateway's only Convex
+#    use (gauge bonus) degrades to 0. Persistence + functions activate the moment
+#    CONVEX_SELF_HOSTED_ADMIN_KEY is set and the stack is redeployed.
+if [ -z "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ]; then
+  echo "[convex-deploy] no CONVEX_SELF_HOSTED_ADMIN_KEY — anonymous/bootstrap mode:"
+  echo "[convex-deploy]   skipping function deploy + env seeding (persistence disabled)."
+  echo "[convex-deploy]   To enable: mint the key once via 'generate_admin_key.sh' in the"
+  echo "[convex-deploy]   convex-backend container, set CONVEX_SELF_HOSTED_ADMIN_KEY, redeploy."
+  exit 0
+fi
+
 # 1) Push the Convex functions into the self-hosted backend.
 #    (Reads CONVEX_SELF_HOSTED_URL + CONVEX_SELF_HOSTED_ADMIN_KEY from env.)
 pnpm exec convex deploy -y
