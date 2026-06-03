@@ -66,10 +66,11 @@ fi
 #    running:healthy, runtime logs reveal the actual error. Persistence activates
 #    automatically when this step succeeds.
 if ! pnpm exec convex deploy -y; then
-  echo "[convex-deploy] WARNING: 'convex deploy' failed — stack will come up without deployed functions."
+  echo "[convex-deploy] WARNING: 'convex deploy' failed — stack will come up without freshly deployed functions."
   echo "[convex-deploy]   Admin key may be wrong format, backend may have rejected it, or network issue."
-  echo "[convex-deploy]   Gateway/worker will start in anonymous mode; read runtime logs to diagnose."
-  exit 0
+  echo "[convex-deploy]   NOT exiting (FEN-91): deployment-env seeding below only needs the admin key, not a"
+  echo "[convex-deploy]   successful function deploy — so still seed env (incl. BETTER_AUTH_SECRET) so a"
+  echo "[convex-deploy]   transient deploy hiccup can't leave auth on the better-auth DEFAULT secret."
 fi
 
 # 2) Seed the deployment env vars the functions actually read (grep'd from
