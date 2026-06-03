@@ -33,7 +33,7 @@
 
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -56,6 +56,8 @@ const DEFAULT_COOLIFY_URL = "https://coolify.fenysk.fr";
 
 const DEPLOY_TIMEOUT_MS = Number(process.env.COOLIFY_DEPLOY_TIMEOUT_MS ?? 600_000);
 const POLL_INTERVAL_MS = Number(process.env.COOLIFY_POLL_INTERVAL_MS ?? 8_000);
+// How long a post-build "exited/unhealthy" may persist before we call it stuck.
+const UNHEALTHY_GRACE_MS = Number(process.env.COOLIFY_UNHEALTHY_GRACE_MS ?? 120_000);
 
 // ── tiny utils ──────────────────────────────────────────────────────────────
 const log = (m) => console.log(m);
@@ -303,8 +305,47 @@ async function resolveApp(api, c) {
   });
   const uuid = created.uuid ?? created.application_uuid ?? created.data?.uuid;
   if (!uuid) throw new Error(`create returned no uuid: ${JSON.stringify(created)}`);
-  log(`· created app ${uuid} — persist COOLIFY_APP_UUID=${uuid} for idempotent re-runs`);
+  // Persist immediately so a re-run (e.g. after a slow first build times out the
+  // health poll) REUSES this app instead of creating a duplicate in LivePlace.
+  persistAppUuid(uuid);
+  log(`· created app ${uuid} — saved COOLIFY_APP_UUID to ${rel(DEPLOY_ENV_PATH)} for idempotent re-runs`);
   return uuid;
+}
+
+/** Upsert KEY=value in deploy.env (create the file if needed), replacing any
+ *  prior line. deploy.env is gitignored, so persisting secrets here is safe. */
+function setDeployEnv(key, value) {
+  let lines = existsSync(DEPLOY_ENV_PATH) ? readFileSync(DEPLOY_ENV_PATH, "utf8").split("\n") : [];
+  lines = lines.filter((l) => !new RegExp(`^\\s*${key}\\s*=`).test(l));
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  lines.push(`${key}=${value}`, "");
+  writeFileSync(DEPLOY_ENV_PATH, lines.join("\n"));
+}
+
+function persistAppUuid(uuid) {
+  try {
+    setDeployEnv("COOLIFY_APP_UUID", uuid);
+  } catch (err) {
+    log(`  (warning: could not persist COOLIFY_APP_UUID — set it manually to ${uuid}: ${err.message})`);
+  }
+}
+
+/** Persist the secrets the script auto-generated so EVERY later run reuses the
+ *  same values. Critical for Convex: a rotated CONVEX_INSTANCE_SECRET would
+ *  orphan the deployment and break the admin key minted from the old secret. */
+function persistGenerated(built) {
+  for (const k of built.generated) {
+    const v = built.stack[k];
+    try {
+      setDeployEnv(k, v);
+      process.env[k] = v; // so a rebuild within this same run reuses it too
+    } catch (err) {
+      log(`  (warning: could not persist generated ${k}: ${err.message})`);
+    }
+  }
+  if (built.generated.length) {
+    log(`· persisted generated secrets to ${rel(DEPLOY_ENV_PATH)} (stable across redeploys): ${built.generated.join(", ")}`);
+  }
 }
 
 async function pushEnvs(api, uuid, stack, buildTime) {
@@ -320,12 +361,49 @@ async function pushEnvs(api, uuid, stack, buildTime) {
 
 async function triggerDeploy(api, uuid) {
   const res = await api("GET", `/deploy?uuid=${encodeURIComponent(uuid)}&force=true`);
-  log(`· deploy queued: ${JSON.stringify(res)}`);
+  const dep = res.deployments?.[0]?.deployment_uuid ?? res.deployment_uuid ?? null;
+  log(`· deploy queued${dep ? ` (deployment ${dep})` : ""}: ${JSON.stringify(res)}`);
+  return dep;
+}
+
+/** Wait for the BUILD to finish before judging container health. A freshly
+ *  created app reports `exited:unhealthy` while the build is still running, so
+ *  judging app health before the deployment is done gives a false failure
+ *  (the bug the first live run hit). Poll the deployment to a terminal state. */
+async function waitForDeployment(api, deploymentUuid) {
+  if (!deploymentUuid) {
+    log("  (no deployment uuid returned — falling back to app-health polling)");
+    return;
+  }
+  const t0 = Date.now();
+  let last = "";
+  while (Date.now() - t0 < DEPLOY_TIMEOUT_MS) {
+    let dep;
+    try {
+      dep = await api("GET", `/deployments/${deploymentUuid}`);
+    } catch (err) {
+      log(`  (deployment poll error, retrying: ${err.message})`);
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+    const status = dep.status ?? dep.data?.status ?? "unknown";
+    if (status !== last) {
+      log(`  build: ${status}`);
+      last = status;
+    }
+    if (/finished|success|completed/i.test(status)) return;
+    if (/failed|error|cancelled/i.test(status)) {
+      throw new Error(`build ${status} — logs: ${dep.deployment_url ?? `${deploymentUuid}`}`);
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new Error(`timed out after ${Math.round(DEPLOY_TIMEOUT_MS / 1000)}s waiting for the build to finish`);
 }
 
 async function waitHealthy(api, uuid) {
   const t0 = Date.now();
   let last = "";
+  let badSince = 0;
   while (Date.now() - t0 < DEPLOY_TIMEOUT_MS) {
     let app;
     try {
@@ -343,16 +421,28 @@ async function waitHealthy(api, uuid) {
     // Coolify status looks like "running:healthy" / "running:unhealthy" / "exited".
     if (/running:healthy/.test(status)) return;
     if (/running\b/.test(status) && !/unhealthy|starting/.test(status)) return;
-    if (/exited|error|degraded/.test(status)) throw new Error(`deployment unhealthy: ${status}`);
+    // Right after a build the containers flap (exited → starting → healthy), so
+    // an early `exited`/`unhealthy` is NOT fatal — only fail if it persists past
+    // the grace window (e.g. convex-deploy genuinely stuck on a missing key).
+    if (/exited|error|degraded|unhealthy/.test(status)) {
+      if (badSince === 0) badSince = Date.now();
+      else if (Date.now() - badSince > UNHEALTHY_GRACE_MS) {
+        throw new Error(`stack stuck "${status}" for >${Math.round(UNHEALTHY_GRACE_MS / 1000)}s (likely a missing CONVEX_SELF_HOSTED_ADMIN_KEY or a crashing service)`);
+      }
+    } else {
+      badSince = 0;
+    }
     await sleep(POLL_INTERVAL_MS);
   }
-  throw new Error(`timed out after ${Math.round(DEPLOY_TIMEOUT_MS / 1000)}s waiting for healthy`);
+  throw new Error(`timed out after ${Math.round(DEPLOY_TIMEOUT_MS / 1000)}s waiting for healthy (last status: ${last})`);
 }
 
 function runSmoke(c) {
   return new Promise((resolve, reject) => {
     if (!c.publicBaseUrl) return reject(new Error("PUBLIC_BASE_URL unknown — cannot point the smoke at the deployment"));
-    const wsUrl = `wss://${c.host}/ws`;
+    // Match the WS scheme to the public scheme: https→wss, http→ws (Coolify
+    // autogenerated sslip.io domains are http unless TLS is enabled).
+    const wsUrl = `${/^https/i.test(c.publicBaseUrl) ? "wss" : "ws"}://${c.host}/ws`;
     const child = spawn(process.execPath, [join(REPO_ROOT, "scripts", "smoke.mjs")], {
       stdio: "inherit",
       env: {
@@ -431,9 +521,35 @@ async function main() {
   await assertLiveplaceProject(api, c);
   c.serverUuid = await resolveServerUuid(api, c);
   const uuid = await resolveApp(api, c);
-  await pushEnvs(api, uuid, stack, buildTime);
-  await triggerDeploy(api, uuid);
-  log("· waiting for the stack to become healthy…");
+
+  // Read the Coolify-assigned domain back so PUBLIC_* + the VITE_* build args are
+  // real (an empty PUBLIC_BASE_URL bakes a broken frontend + breaks the smoke).
+  if (!c.publicBaseUrl) {
+    try {
+      const app = await api("GET", `/applications/${uuid}`);
+      const fqdn = String(app.fqdn ?? app.data?.fqdn ?? "").split(",")[0].trim();
+      if (fqdn) {
+        c.publicBaseUrl = fqdn.replace(/\/$/, "");
+        c.host = new URL(c.publicBaseUrl).host;
+        log(`· using Coolify-assigned domain: ${c.publicBaseUrl}`);
+        setDeployEnv("PUBLIC_BASE_URL", c.publicBaseUrl);
+      } else {
+        log("  (Coolify returned no fqdn yet — VITE_* build args will be empty)");
+      }
+    } catch (err) {
+      log(`  (could not read assigned domain: ${err.message})`);
+    }
+  }
+
+  // Build the final stack now the URL is known; persist generated secrets so
+  // redeploys stay stable (Convex instance secret / admin key coherence).
+  const built = buildStackEnv(c);
+  persistGenerated(built);
+  await pushEnvs(api, uuid, built.stack, built.buildTime);
+  const deploymentUuid = await triggerDeploy(api, uuid);
+  log("· waiting for the build to finish…");
+  await waitForDeployment(api, deploymentUuid);
+  log("· build finished; waiting for the stack to become healthy…");
   await waitHealthy(api, uuid);
   log("· deployment healthy.");
 
