@@ -45,6 +45,7 @@ export const authEnvStatus = query({
     betterAuthSecret: "set" | "DEFAULT";
     present: string[];
     missing: string[];
+    seedReport: string | null;
   }> => {
     const present: string[] = [];
     const missing: string[] = [];
@@ -59,6 +60,12 @@ export const authEnvStatus = query({
       betterAuthSecret: secret ? "set" : "DEFAULT",
       present, // names only — NEVER values
       missing,
+      // FEN-98: deploy.sh's per-name seed DECISION for THIS functions runtime,
+      // as "NAME:set,NAME:UNSET,…" (names + coarse flag only, never values).
+      // Disambiguates "BETTER_AUTH_SECRET empty in the convex-deploy container"
+      // (env_file/Coolify gap) from "convex env set dropped it". null until the
+      // deploy.sh that publishes it has run.
+      seedReport: process.env.DIAG_SEED_REPORT ?? null,
     };
   },
 });

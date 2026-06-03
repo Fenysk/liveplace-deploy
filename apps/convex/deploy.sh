@@ -94,8 +94,10 @@ do
   if [ -n "$val" ]; then
     printf '%s=%s\n' "$name" "$val" >> "$ENV_TMP"
     echo "[convex-deploy] seed deployment env: $name"
+    SEED_REPORT="${SEED_REPORT:-}${name}:set,"
   else
     echo "[convex-deploy] skip (unset): $name"
+    SEED_REPORT="${SEED_REPORT:-}${name}:UNSET,"
   fi
 done
 
@@ -105,6 +107,51 @@ else
   echo "[convex-deploy] no deployment env to seed"
 fi
 rm -f "$ENV_TMP"
+
+# 2a) FEN-98 instrument + belt-and-suspenders for BETTER_AUTH_SECRET.
+#     SYMPTOM (proven by diag.authEnvStatus): only BETTER_AUTH_SECRET fails to
+#     reach the functions runtime — its 6 siblings (incl. TWITCH_CLIENT_SECRET)
+#     seed fine. Value-formatting and the Coolify env-record were both ruled out
+#     from outside the box. The one link nobody could observe is whether
+#     BETTER_AUTH_SECRET is even NON-EMPTY *inside this convex-deploy container*
+#     at seed time (no exec API; the one-shot's runtime stdout isn't in Coolify's
+#     build-phase log). So make the decision observable AND defend it:
+#
+#   (a) Publish DIAG_SEED_REPORT = "NAME:set,NAME:UNSET,…" (names + coarse flag
+#       ONLY, never values) as its own one-var dotenv push. diag.authEnvStatus
+#       surfaces it, so one redeploy tells us, for THIS container's env:
+#         - BETTER_AUTH_SECRET:UNSET  => the var never reached the container .env
+#           (Coolify/env_file materialization gap — e.g. a duplicate/preview entry
+#           emitting an empty last-wins line). deploy.sh cannot conjure a value;
+#           fix is on the Coolify env (DevOps), now with hard proof.
+#         - BETTER_AUTH_SECRET:set but diag betterAuthSecret:"DEFAULT" => the bulk
+#           `--from-file` push dropped it; (b) below already works around that.
+#       Pushed via its OWN from-file (not argv) so it stays secret-safe AND so a
+#       successful push also proves the from-file code path itself works.
+#
+#   (b) If BETTER_AUTH_SECRET is present in this container's env, push it AGAIN on
+#       its own (dedicated one-var from-file, still out of argv). A bulk
+#       multi-line `--from-file` edge case that silently skips one entry then
+#       can't leave auth on the default secret. Harmless if already seeded.
+REPORT_TMP=".env.report.$$"
+printf 'DIAG_SEED_REPORT=%s\n' "${SEED_REPORT:-}" > "$REPORT_TMP"
+if ! pnpm exec convex env set --from-file "$REPORT_TMP"; then
+  echo "[convex-deploy] WARNING: could not push DIAG_SEED_REPORT (instrument only)"
+fi
+rm -f "$REPORT_TMP"
+
+if [ -n "${BETTER_AUTH_SECRET:-}" ]; then
+  BAS_TMP=".env.bas.$$"
+  printf 'BETTER_AUTH_SECRET=%s\n' "$BETTER_AUTH_SECRET" > "$BAS_TMP"
+  if pnpm exec convex env set --from-file "$BAS_TMP"; then
+    echo "[convex-deploy] re-seeded BETTER_AUTH_SECRET individually (belt-and-suspenders)"
+  else
+    echo "[convex-deploy] WARNING: individual BETTER_AUTH_SECRET re-seed failed"
+  fi
+  rm -f "$BAS_TMP"
+else
+  echo "[convex-deploy] BETTER_AUTH_SECRET UNSET in container env — cannot seed (see DIAG_SEED_REPORT; fix the Coolify env, FEN-98)"
+fi
 
 # 3) Seed the durable canvas row for the deployed slug (FEN-94). The worker seam
 #    (applyFlush / setGalleryFields / recordSnapshot) is a no-op until a
