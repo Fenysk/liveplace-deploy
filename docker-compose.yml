@@ -188,12 +188,13 @@ services:
       # Site address decides scheme/port inside Caddy (see infra/Caddyfile).
       # Default ':80' = reliable HTTP-only on all hosts (FEN-78 #4).
       - SITE_ADDRESS=${SITE_ADDRESS:-:80}
-    # Host ports are configurable to avoid collisions with a system Caddy,
-    # Supabase Kong (8443), etc. on a real host (FEN-78 #5). Container always
-    # listens on 80/443; only the published host port changes.
-    ports:
-      - "${PROXY_HTTP_PORT:-80}:80"
-      - "${PROXY_HTTPS_PORT:-443}:443"
+    # On Coolify the edge Traefik routes the public domain to this container's
+    # INTERNAL :80 (via docker_compose_domains) — publishing host ports breaks that
+    # routing and yields a 404 at the public URL (FEN-92, mirrors the anon-compose
+    # fix 0ba0661). So expose :80 to the Coolify network instead of host-publishing.
+    # On a bare host (NAS) Traefik/Caddy still reaches the container on :80.
+    expose:
+      - "80"
     volumes:
       - caddy-data:/data
       - caddy-config:/config
