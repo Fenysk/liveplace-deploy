@@ -343,6 +343,8 @@ export const run = action({
         return ctx.runMutation(internal.worker.generateUploadUrl, {});
       case "setGalleryFields":
         return ctx.runMutation(internal.canvases.setGalleryFields, a.args);
+      case "ensureDefaultCanvas":
+        return ctx.runMutation(internal.canvases.ensureDefaultCanvas, a.args);
       case "getCanvasDurable":
         return ctx.runQuery(internal.worker.getCanvasDurable, a.args);
       case "getLatestSnapshot":
