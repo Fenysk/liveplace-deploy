@@ -1,0 +1,83 @@
+# docker-compose.coolify-anon.yml — minimal ANONYMOUS bootstrap for the public
+# Coolify VPS (FEN-80). Brings up only the services the anonymous WS live-pixel
+# smoke exercises: redis + gateway + web + proxy.
+#
+# WHY a reduced stack: the hot pixel path (place → ack → broadcast) is Redis-only
+# (FEN-50); the gateway's only Convex use (the gauge bonus) degrades to 0 when
+# Convex is absent; and self-hosted Convex needs a one-time, on-box admin-key mint
+# (generate_admin_key.sh in the convex-backend container) that the Coolify API
+# token cannot perform. So convex-backend / convex-deploy / worker are omitted
+# here — they are not needed to prove the deploy + hot path on the VPS, and they
+# were the source of every up/health failure. Bring the full docker-compose.yml
+# online once the admin key is provisioned (then persistence + functions activate).
+#
+# Same images/Dockerfiles/Caddyfile as the full stack; the Caddy /convex and
+# /api/auth routes simply 502 here (the smoke never hits them). Env comes from
+# .env (PUBLIC_BASE_URL, SITE_ADDRESS, secrets, PROXY_HTTP/HTTPS_PORT, …).
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    env_file: [.env]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_CONVEX_URL: ${VITE_CONVEX_URL}
+        VITE_CONVEX_SITE_URL: ${VITE_CONVEX_SITE_URL}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    ports:
+      - "${PROXY_HTTP_PORT:-8080}:80"
+      - "${PROXY_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+      - gateway
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  caddy-data:
+  caddy-config:
