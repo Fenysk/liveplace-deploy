@@ -31,7 +31,7 @@ services:
       - CONVEX_CLOUD_ORIGIN=${VITE_CONVEX_URL}
       - CONVEX_SITE_ORIGIN=${VITE_CONVEX_SITE_URL}
     volumes:
-      - convex-data:/convex/data
+      - convex-data-2:/convex/data
     healthcheck:
       # The convex-backend image ships curl (matches upstream self-hosting compose);
       # it has no busybox/wget, so wget here would never go healthy.
@@ -234,7 +234,7 @@ services:
 
 volumes:
   redis-data:
-  convex-data:
+  convex-data-2:
   # Holds the in-stack-minted Convex admin key (FEN-92): convex-admin-key writes
   # it, convex-deploy reads it. Not a secret store the operator manages — the key
   # is re-derivable from CONVEX_INSTANCE_SECRET on every deploy.
