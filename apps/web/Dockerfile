@@ -36,9 +36,14 @@ RUN pnpm install --frozen-lockfile
 COPY packages ./packages
 COPY apps/convex ./apps/convex
 COPY apps/web ./apps/web
-# Generate @canvas/convex/_generated (api/dataModel/server) for the web typecheck
-# + build. Local, no deployment needed.
-RUN pnpm --filter @canvas/convex codegen
+# Regenerate @canvas/convex/_generated (api/dataModel/server) when possible.
+# The _generated files are COMMITTED (FEN-73) and copied in above, so the web
+# typecheck/build does not depend on this. convex ≥1.39 `codegen` requires a
+# deployment config (CONVEX_DEPLOYMENT) which is absent in an offline image
+# build — so run it best-effort and fall back to the committed _generated rather
+# than failing the whole build (FEN-80: this hard-failed every VPS deploy; the
+# web build compiles cleanly from the committed files — verified).
+RUN pnpm --filter @canvas/convex codegen || echo "[web build] convex codegen unavailable offline — using committed _generated"
 RUN pnpm --filter @canvas/web build
 
 FROM node:22-alpine AS runtime
