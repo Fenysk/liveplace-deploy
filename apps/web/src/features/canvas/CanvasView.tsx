@@ -18,6 +18,8 @@
  * Every user string flows through `@canvas/i18n` so the UI is FR/EN in place.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "convex/react";
+import { makeFunctionReference } from "convex/server";
 import { useTranslate } from "@canvas/i18n/react";
 import type { MessageKey } from "@canvas/i18n";
 import type { GaugeState } from "@canvas/protocol";
@@ -33,12 +35,38 @@ import { BatchSelection, EMPTY_COLOR } from "./selection.js";
 import { OnboardingCoach, createLocalOnboardingStorage, type OnboardingHint } from "./onboarding.js";
 import { gateInteraction, type CanvasInteraction } from "./authGate.js";
 import { TierClaim, inertTierSource, type TierSource } from "./tierClaim.js";
+import { derivePlaceState, type CanPlaceReason, type ConnectionState } from "./placeState.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
 const DEFAULT_COLOR = 5; // red — a visible default pose colour
 const TOAST_MS = 2600;
 const IDLE_MS = 7000; // hesitation: inactive a few seconds ⇒ offer help (ux-spec §D9)
+
+/**
+ * Convex queries referenced by name (`module:function`) — decoupled from the
+ * generated api, the same pattern GalleryPage uses. They feed the unified
+ * "puis-je poser ?" indicator (Lot E, [FEN-117]):
+ *   - `getCanvasBySlug` → the canvas doc (status + event window) and its id
+ *   - `canPlace` → the placement permission contract `{ allowed, reason? }`
+ * Both are skipped (no network) when there is no slug to resolve.
+ */
+const getCanvasBySlugRef = makeFunctionReference<
+  "query",
+  { slug: string },
+  { _id: string; status: string; eventStartAt: number | null; eventEndAt: number | null } | null
+>("canvases:getCanvasBySlug");
+
+const canPlaceRef = makeFunctionReference<
+  "query",
+  { canvasId: string },
+  { allowed: boolean; reason?: CanPlaceReason }
+>("canvases:canPlace");
+
+/** Map the WS transport status onto the state machine's connection vocabulary. */
+function toConnectionState(status: ConnectionStatus): ConnectionState {
+  return status === "open" ? "open" : status === "connecting" ? "connecting" : "offline";
+}
 
 interface ToastState {
   kind: PlacementFeedback["kind"] | "cap" | "placed";
@@ -70,6 +98,11 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const placementRef = useRef<OptimisticPlacement | null>(null);
   const selectionRef = useRef<BatchSelection>(new BatchSelection(0));
   const hoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Latest unified place-state, mirrored into refs so the bound-once renderer
+  // tap callback can prevent staging BEFORE the click when placement is blocked
+  // (Lot E: "prévenir avant le clic", never an after-the-fact surprise).
+  const canPlaceNowRef = useRef(false);
+  const blockedMsgRef = useRef<MessageKey>("canvas.state.loading");
 
   // current tool, mirrored into refs so the renderer's tap callback (bound once)
   // always reads the latest value without re-binding.
@@ -116,8 +149,9 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const bumpTier = useCallback(() => setTierVersion((n) => n + 1), []);
   // Focus continuity for the encash gesture (FEN-140 #1): when a claim empties
   // the signal, its focused button unmounts and focus would fall to <body>. We
-  // move focus to the (always-mounted) gauge — the réserve that just grew — so
-  // keyboard/SR users keep their place right after the dopamine moment.
+  // move focus to the always-mounted rang-1 "puis-je poser" indicator (Lot E) —
+  // which now shows the grown réserve via the effective gauge — so keyboard/SR
+  // users keep their place right after the dopamine moment.
   const gaugeRef = useRef<HTMLParagraphElement>(null);
   const restoreClaimFocusRef = useRef(false);
 
@@ -142,6 +176,25 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => emit({ type: "idle" }), IDLE_MS);
   }, [emit]);
+
+  // Sticky ban learned from a WS `banned` error — lets the unified indicator
+  // (Lot E) keep showing "banned" pre-click after the first refusal. The backend
+  // canPlace now also evaluates bans (FEN-132), so this is a belt-and-braces
+  // fallback for the null-slug default canvas.
+  const [bannedHint, setBannedHint] = useState(false);
+
+  // Unified "puis-je poser ?" inputs (Lot E, FEN-117). The session is the same
+  // `authClient.useSession()` read above for the FEN-115 view-first gate
+  // (`authedRef`); `authenticated` reuses it so the indicator and the consent
+  // gate agree on auth. The canvas doc (status + event window) and its
+  // permission contract come from Convex, skipped when there is no slug.
+  const authenticated = !!session;
+  const canvasDoc = useQuery(getCanvasBySlugRef, slug ? { slug } : "skip");
+  const canvasId = canvasDoc?._id ?? null;
+  const permissionResult = useQuery(canPlaceRef, canvasId ? { canvasId } : "skip");
+  // `useQuery` returns undefined while loading; with no slug there is nothing to
+  // resolve, so permission stays unknown and the indicator leans on auth/gauge.
+  const permission = slug ? permissionResult : undefined;
 
   /** Push the staged batch + hovered cell to the renderer and re-render the HUD. */
   const syncOverlay = useCallback(() => {
@@ -175,8 +228,18 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   // Stage / toggle / recolor a cell with the current tool (the batch gesture).
   const stageCell = useCallback(
     (x: number, y: number) => {
-      // First account-requiring interaction → consent (not only at commit).
+      // First account-requiring interaction → consent (FEN-115 view-first wins on
+      // the auth dimension: invite, don't block). For an anonymous viewer this
+      // redirects to Twitch before any cell is staged.
       if (!requireAccount("stage-cell")) return;
+      // Then prevent before the click for the *other* blocked reasons (offline,
+      // cooldown, event window, ban): show the reason instead of staging a doomed
+      // cell (Lot E — no "click to discover you can't"). Recoloring/deselecting an
+      // already-staged cell never grows the batch, so let those through.
+      if (!canPlaceNowRef.current && !selectionRef.current.has(x, y)) {
+        showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
+        return;
+      }
       const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
       const r = selectionRef.current.apply(x, y, c);
       bumpActivity();
@@ -201,6 +264,12 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     if (!requireAccount("validate")) return;
     const placement = placementRef.current;
     if (!placement) return;
+    // Defensive: the button is disabled when blocked, but never commit a doomed
+    // batch — surface the reason and keep the staged cells (Lot E + FEN-113).
+    if (!canPlaceNowRef.current) {
+      showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
+      return;
+    }
     const cells = selectionRef.current.take();
     for (const cell of cells) {
       const msg = placement.place(cell.x, cell.y, cell.color);
@@ -363,13 +432,21 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       el,
       {
         onTap: (x, y, pointerType) => {
-          // Desktop (mouse/pen) or already in draw mode → stage directly.
+          // Desktop (mouse/pen) or already in draw mode → stage directly (stageCell
+          // prevents staging when blocked and explains why).
           if (pointerType === "mouse" || pointerType === "pen" || drawingRef.current) {
             stageCell(x, y);
             return;
           }
-          // Mobile first touch → reveal "Dessiner" for this cell (no accidental pose).
-          // The reveal is the mobile "visée" — the funnel's first-aim moment.
+          // Mobile first touch: if placement is blocked, surface the reason rather
+          // than revealing "Dessiner" (prévenir avant le clic, Lot E) — and don't
+          // count it as an "aim" funnel event.
+          if (!canPlaceNowRef.current) {
+            showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
+            return;
+          }
+          // Otherwise reveal "Dessiner" for this cell (no accidental pose). The
+          // reveal is the mobile "visée" — the funnel's first-aim moment (FEN-118).
           if (!aimedRef.current) {
             aimedRef.current = true;
             emit({ type: "aim" });
@@ -418,7 +495,10 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
               surface: renderer,
               onGauge: setGauge,
               onFeedback: (f) => {
-                if (f.kind === "banned") selectionRef.current.setLocked(true);
+                if (f.kind === "banned") {
+                  selectionRef.current.setLocked(true);
+                  setBannedHint(true); // sticky → unified indicator shows "banned" pre-click
+                }
                 showToast(f);
               },
             });
@@ -453,8 +533,42 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     };
   }, [slug, showToast, stageCell, validate, cancel, emit, bumpActivity]);
 
+  // Cooldown view-state at component scope: read by the per-second tick re-render
+  // and by the FEN-118 "gauge-empty" anticipation nudge below. Based on the real
+  // server gauge (the optimistic tier overlay is folded in separately, below).
   const onCooldown = gauge !== null && gauge.charges <= 0 && gauge.cooldownUntil > Date.now();
-  const cooldownSeconds = onCooldown ? Math.max(0, Math.ceil((gauge!.cooldownUntil - Date.now()) / 1000)) : 0;
+  const cooldownSeconds =
+    onCooldown && gauge !== null ? Math.max(0, Math.ceil((gauge.cooldownUntil - Date.now()) / 1000)) : 0;
+
+  // Lot D derived values (tierVersion forces the refresh). The réserve max/charges
+  // grow by the optimistic overlay the instant a tier is encashed.
+  void tierVersion;
+  const tier = tierRef.current;
+  const pendingTiers = tier.pending;
+  const effectiveMax = gauge !== null ? tier.effectiveMax(gauge.max) : 0;
+  const effectiveCharges = gauge !== null ? tier.effectiveCharges(gauge.charges) : 0;
+  // Fold the optimistic tier overlay into the gauge the unified indicator reads
+  // (Lot D × Lot E): a just-encashed réserve shows in the "ready" charge count
+  // and lifts a 0-charge "cooldown" to "ready" before the confirming gauge frame.
+  const effectiveGauge: GaugeState | null =
+    gauge === null ? null : { ...gauge, charges: effectiveCharges, max: effectiveMax };
+
+  // The single unified "puis-je poser ?" answer (Lot E, FEN-117): one indicator,
+  // yes/no + why + when, recomputed each render (the per-second tick re-renders
+  // so the cooldown countdown stays live). The actual colour/icon is delegated
+  // to the UI phase — here we render the text label only (C6).
+  const placeState = derivePlaceState({
+    connection: toConnectionState(status),
+    authenticated,
+    permission,
+    eventStartAt: canvasDoc?.eventStartAt ?? null,
+    eventEndAt: canvasDoc?.eventEndAt ?? null,
+    gauge: effectiveGauge,
+    bannedHint,
+    now: Date.now(),
+  });
+  canPlaceNowRef.current = placeState.canPlace;
+  blockedMsgRef.current = placeState.messageKey;
 
   // Onboarding: arrival nudge + start the hesitation clock, once per mount.
   useEffect(() => {
@@ -498,16 +612,6 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const sel = selectionRef.current;
   const count = sel.count; // re-read each render; selVersion forces the refresh
   void selVersion;
-
-  // Lot D derived values (tierVersion forces the refresh). The réserve max grows
-  // by the optimistic overlay the instant a tier is encashed.
-  void tierVersion;
-  const tier = tierRef.current;
-  const pendingTiers = tier.pending;
-  const effectiveMax = gauge !== null ? tier.effectiveMax(gauge.max) : 0;
-  // Current charges incl. the optimistic +1-per-claim grant, so a just-encashed
-  // réserve visibly grows (5/5 → 6/6) before the confirming gauge frame lands.
-  const effectiveCharges = gauge !== null ? tier.effectiveCharges(gauge.charges) : 0;
 
   return (
     <div className="lp-app">
@@ -573,23 +677,34 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       <div className="lp-hud">
         <h1>{t("app.title")}</h1>
 
+        {/* Rang 1 — unified "puis-je poser ?" indicator (Lot E, FEN-117). One
+            line answering yes/no + why + when, with a text label for every
+            state (C6), superseding the raw gauge/cooldown readout (the charge
+            count and the cooldown countdown are carried in its messages). The
+            `data-state` exposes the machine state for the UI phase to style; no
+            colour decision is made here. It is also the always-mounted focus
+            anchor after an encash (FEN-140 #1): when the claim signal empties,
+            focus moves here — the live réserve status (it shows the grown count
+            via the effective gauge) — instead of falling to <body>. */}
         <p
           ref={gaugeRef}
           tabIndex={-1}
-          className={`lp-gauge${onCooldown ? " is-empty" : ""}`}
+          className={`lp-state${placeState.canPlace ? " is-ready" : " is-blocked"}`}
+          data-state={placeState.kind}
+          role="status"
           aria-live="polite"
         >
-          {gauge === null
-            ? t("canvas.connecting")
-            : onCooldown
-              ? t("canvas.cooldown", { seconds: cooldownSeconds })
-              : count > 0
-                ? t("canvas.batchCount", { count, max: sel.capacity })
-                : t("canvas.gauge", { current: effectiveCharges, max: effectiveMax })}
+          {t(placeState.messageKey as MessageKey, placeState.params)}
         </p>
 
-        {/* Lot D — claim signal: non-blocking, persistent, stackable. The viewer
-            encashes a tier earned by playing; nothing else (no points/shop). */}
+        {/* Rang 2 — the staging counter, shown only while a batch is in progress. */}
+        {count > 0 && (
+          <p className="lp-gauge">{t("canvas.batchCount", { count, max: sel.capacity })}</p>
+        )}
+
+        {/* Lot D — claim signal (FEN-116): non-blocking, persistent, stackable.
+            The viewer encashes a tier earned by playing; nothing else (no
+            points/shop). */}
         {pendingTiers > 0 && (
           // No live role here (FEN-140 #2): the claim signal is a standing
           // affordance, not an alert, so it must not re-announce on every
@@ -639,7 +754,12 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
               gestures — U1) OR enter batch draw mode to build a multi-cell set. */}
           {armed && !drawing && (
             <>
-              <button type="button" className="lp-btn is-primary" onClick={() => placeHere(armed.x, armed.y)}>
+              <button
+                type="button"
+                className="lp-btn is-primary"
+                disabled={sel.isLocked || !placeState.canPlace}
+                onClick={() => placeHere(armed.x, armed.y)}
+              >
                 {t("canvas.placeHere")}
               </button>
               <button
@@ -661,7 +781,12 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
 
           {/* Valider appears once the batch is non-empty. */}
           {count > 0 && (
-            <button type="button" className="lp-btn is-primary" disabled={sel.isLocked} onClick={validate}>
+            <button
+              type="button"
+              className="lp-btn is-primary"
+              disabled={sel.isLocked || !placeState.canPlace}
+              onClick={validate}
+            >
               {t("canvas.validate", { count })}
             </button>
           )}

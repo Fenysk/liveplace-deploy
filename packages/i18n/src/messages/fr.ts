@@ -45,6 +45,22 @@ export const fr: Catalog = {
   "canvas.connecting": "Connexion…",
   "canvas.offline": "Reconnexion…",
 
+  // État unifié « puis-je poser ? » (UX Lot E, FEN-117) — un seul indicateur,
+  // oui/non + pourquoi + quand, un libellé texte par état (C6, jamais la couleur seule).
+  "canvas.state.loading": "La fresque arrive…",
+  "canvas.state.ready": "Tu peux poser — {charges} pixels prêts",
+  "canvas.state.ready.one": "Tu peux poser — 1 pixel prêt",
+  "canvas.state.cooldown": "Plus de pixels — recharge dans {seconds}s",
+  "canvas.state.signedOut": "Connecte-toi avec Twitch pour poser",
+  "canvas.state.frozen": "La pose est en pause",
+  "canvas.state.notStarted": "Ça ouvre à {time}",
+  "canvas.state.notStarted.tomorrow": "Ça ouvre demain à {time}",
+  "canvas.state.notStarted.date": "Ça ouvre le {date} à {time}",
+  "canvas.state.ended": "L'événement est terminé",
+  "canvas.state.archived": "Fresque terminée — en lecture seule",
+  "canvas.state.banned": "Tu ne peux plus poser sur cette fresque",
+  "canvas.state.notFound": "Cette fresque est introuvable",
+
   // Retour de pose sur la toile (F4) — pose/gomme optimiste + rollback (FEN-60)
   "canvas.feedback.cooldown": "En attente — prochain pixel dans {seconds}s",
   "canvas.feedback.banned": "Tu es banni de cette toile",
