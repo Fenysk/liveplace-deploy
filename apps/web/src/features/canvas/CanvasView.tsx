@@ -36,6 +36,7 @@ import { OnboardingCoach, createLocalOnboardingStorage, type OnboardingHint } fr
 import { gateInteraction, type CanvasInteraction } from "./authGate.js";
 import { TierClaim, inertTierSource, type TierSource } from "./tierClaim.js";
 import { derivePlaceState, type CanPlaceReason, type ConnectionState } from "./placeState.js";
+import { deriveModerationNotice, type CanvasLiveness } from "./moderationNotice.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
@@ -570,6 +571,28 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   canPlaceNowRef.current = placeState.canPlace;
   blockedMsgRef.current = placeState.messageKey;
 
+  // Viewer legibility of moderation events (Lot I, FEN-121): explain a collective
+  // event without jargon or anxiety. The frozen/reopen transition is the signal
+  // the frozen protocol lets the viewer observe today (via canPlace →
+  // placement_closed → the `frozen` state); a wipe's `areaChanged` notice is
+  // wired the same way once a moderation-event frame exists (deriveModerationNotice
+  // already models it — see the protocol follow-up). Kept out of the unified
+  // place-state indicator: this is a transient "something happened" banner, not
+  // the standing "can I place?" answer, and it announces politely (never an alert).
+  const prevLivenessRef = useRef<CanvasLiveness>({ frozen: false, bulkChangeSeq: 0 });
+  const [modNotice, setModNotice] = useState<MessageKey | null>(null);
+  const frozenNow = placeState.kind === "frozen";
+  useEffect(() => {
+    const prev = prevLivenessRef.current;
+    const next: CanvasLiveness = { frozen: frozenNow, bulkChangeSeq: prev.bulkChangeSeq };
+    const notice = deriveModerationNotice(prev, next);
+    prevLivenessRef.current = next;
+    if (!notice) return;
+    setModNotice(notice.messageKey);
+    const timer = setTimeout(() => setModNotice(null), notice.autoDismissMs);
+    return () => clearTimeout(timer);
+  }, [frozenNow]);
+
   // Onboarding: arrival nudge + start the hesitation clock, once per mount.
   useEffect(() => {
     emit({ type: "arrive" });
@@ -696,6 +719,16 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
         >
           {t(placeState.messageKey as MessageKey, placeState.params)}
         </p>
+
+        {/* Moderation-event legibility (Lot I, FEN-121): a brief, non-anxiogène
+            "a collective event just happened" note. Polite (informational, not an
+            alert), auto-dismissing, and carries a text label (C6 — colour/icon
+            delegated to the UI phase). */}
+        {modNotice && (
+          <p className="lp-mod-notice" role="status" aria-live="polite" data-mod-notice>
+            {t(modNotice)}
+          </p>
+        )}
 
         {/* Rang 2 — the staging counter, shown only while a batch is in progress. */}
         {count > 0 && (

@@ -61,6 +61,11 @@ export const fr: Catalog = {
   "canvas.state.banned": "Tu ne peux plus poser sur cette fresque",
   "canvas.state.notFound": "Cette fresque est introuvable",
 
+  // Lisibilité viewer des événements de modération (Lot I, FEN-121)
+  "canvas.moderation.areaChanged": "Une zone vient d'être modifiée",
+  "canvas.moderation.paused": "La pose vient d'être mise en pause",
+  "canvas.moderation.reopened": "La pose est de nouveau ouverte",
+
   // Retour de pose sur la toile (F4) — pose/gomme optimiste + rollback (FEN-60)
   "canvas.feedback.cooldown": "En attente — prochain pixel dans {seconds}s",
   "canvas.feedback.banned": "Tu es banni de cette toile",
@@ -195,6 +200,21 @@ export const fr: Catalog = {
   "studio.broadcast.advancedBody": "Ajoute des options d'URL comme ?bg=000000&grid=1&zoom=8 pour cadrer l'overlay.",
   "studio.broadcast.notFound": "Ce canvas n'existe pas ou ne t'appartient pas.",
   "studio.broadcast.back": "Retour au tableau de bord",
+
+  // Panneau de crise streamer (Lot I, FEN-121) — réagir à un raid sans paniquer
+  "studio.crisis.status.calm": "Pose ouverte — gel d'urgence prêt",
+  "studio.crisis.status.frozen": "Pose gelée — agis, puis rouvre",
+  "studio.crisis.freeze": "Geler la pose",
+  "studio.crisis.reopen": "Rouvrir la pose",
+  "studio.crisis.ban": "Bannir un auteur",
+  "studio.crisis.wipe": "Effacer une zone",
+  "studio.crisis.restore": "Annuler cet effacement",
+  "studio.crisis.wipeWarning": "Effacer fait réapparaître ce qui était dessous.",
+  "studio.crisis.firstHint": "En cas de souci, gèle la pose ici.",
+  "studio.crisis.banPrompt": "Choisis l'auteur à bannir sur la fresque.",
+  "studio.crisis.wipePrompt": "Choisis la zone à effacer sur la fresque.",
+  "studio.crisis.announce.frozen": "Pose gelée — les outils de crise sont disponibles.",
+  "studio.crisis.announce.reopened": "Pose rouverte.",
 
   // Generic
   "common.loading": "Chargement…",
