@@ -25,6 +25,8 @@ import {
   GRANT_LUA,
   grantArgs,
   parsePeekResult,
+  peekArgs,
+  REFILL_PEEK_LUA,
   type GaugeParams,
   type PeekResult,
 } from "@canvas/redis-scripts";
@@ -173,6 +175,56 @@ export class IoredisGaugeGrantRunner implements GaugeGrantRunner {
     } catch (err) {
       if (!/NOSCRIPT/.test((err as Error).message)) throw err;
       this.sha = await this.r.script("LOAD", GRANT_LUA);
+      return parsePeekResult(await this.r.evalsha(this.sha, keys.length, ...args));
+    }
+  }
+}
+
+/**
+ * Read-only "what is this user's gauge right now" (refill-peek.lua). Injected like
+ * {@link GaugeGrantRunner} so the seam is unit-testable without a server. Used to
+ * push the INITIAL `gauge` frame on connect (FEN-184): the welcome frame implies
+ * "ready" but carries no charge count, and the client's unified place-state gates
+ * the canvas on a known gauge (`placeState.ts`: `gauge === null` ⇒ the indefinite
+ * "loading"/"La fresque arrive…" state). Without this frame a fresh authenticated
+ * session can never make its first placement — the only other way a gauge lands —
+ * so the canvas deadlocks on loading. The peek is side-effect free (no consume, no
+ * persist), so it is safe to run on every connect.
+ */
+export interface GaugePeekRunner {
+  /** Current gauge snapshot after a virtual refill; never consumes or persists. */
+  peek(userId: string, gauge: GaugeParams, nowMs: number): Promise<PeekResult>;
+}
+
+/**
+ * ioredis-backed peek runner. Loads refill-peek.lua once (SCRIPT LOAD) and runs it
+ * via EVALSHA, reloading + retrying once on NOSCRIPT — same hot-path discipline as
+ * the grant/place/moderation runners.
+ */
+export class IoredisGaugePeekRunner implements GaugePeekRunner {
+  private sha?: string;
+
+  constructor(private readonly cmd: Redis) {}
+
+  private get r(): {
+    script: (sub: "LOAD", lua: string) => Promise<string>;
+    evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+  } {
+    return this.cmd as unknown as {
+      script: (sub: "LOAD", lua: string) => Promise<string>;
+      evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+    };
+  }
+
+  async peek(userId: string, gauge: GaugeParams, nowMs: number): Promise<PeekResult> {
+    const { keys, argv } = peekArgs({ nowMs, gauge, userId });
+    const args = [...keys, ...argv].map(String);
+    if (this.sha === undefined) this.sha = await this.r.script("LOAD", REFILL_PEEK_LUA);
+    try {
+      return parsePeekResult(await this.r.evalsha(this.sha, keys.length, ...args));
+    } catch (err) {
+      if (!/NOSCRIPT/.test((err as Error).message)) throw err;
+      this.sha = await this.r.script("LOAD", REFILL_PEEK_LUA);
       return parsePeekResult(await this.r.evalsha(this.sha, keys.length, ...args));
     }
   }

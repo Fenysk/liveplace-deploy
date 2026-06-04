@@ -69,6 +69,20 @@ class FakeRedis {
     });
   }
 
+  // Minimal Lua surface: only the read-only refill-peek (initial gauge frame,
+  // FEN-184) is EVALSHA'd on the connect path these e2e tests exercise. Model a
+  // never-placed user as conceptually full at the requested effective max, with no
+  // cooldown — enough to assert the gauge frame is pushed. ARGV (post-numKeys) is
+  // [gaugeKey, now, interval, amount, max]; reply shape is [charges, max, cooldown].
+  async script(_sub: "LOAD", _lua: string): Promise<string> {
+    return "sha-fake";
+  }
+
+  async evalsha(_sha: string, _numKeys: number, ...args: string[]): Promise<unknown> {
+    const max = Number(args[4]);
+    return [max, max, 0];
+  }
+
   on(event: "message" | "ready", cb: MessageListener | (() => void)): this {
     if (event === "message") this.bus.listeners.push(cb as MessageListener);
     return this;

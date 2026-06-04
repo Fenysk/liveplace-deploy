@@ -163,6 +163,44 @@ test("valid token reaches the placement path with its userId", async () => {
   }
 });
 
+test("authenticated connect pushes an initial gauge frame so the canvas can leave loading (FEN-184)", async () => {
+  const gw = new Gateway(cfg(), undefined, createFakeRedis().pair);
+  await gw.start();
+  try {
+    const token = await mint("user-9");
+    const { ws, texts } = await connect(gw.boundPort, { token });
+    // The client gates the canvas on a known gauge (placeState.ts: gauge === null
+    // ⇒ the indefinite "loading"/"La fresque arrive…" state). A fresh session must
+    // get its gauge WITHOUT first placing — otherwise it deadlocks.
+    const gauge = await waitFor(ws, texts, (m) => m.t === "gauge");
+    assert.equal(gauge.t, "gauge");
+    assert.ok(gauge.t === "gauge");
+    // Never-placed ⇒ conceptually full, no cooldown.
+    assert.equal(gauge.charges, gauge.max);
+    assert.ok(gauge.max > 0);
+    assert.equal(gauge.cooldownUntil, 0);
+    ws.close();
+  } finally {
+    await gw.stop();
+  }
+});
+
+test("anonymous (tokenless) connect gets NO gauge frame (read-only viewers never place)", async () => {
+  const gw = new Gateway(cfg(), undefined, createFakeRedis().pair);
+  await gw.start();
+  try {
+    const { ws, texts } = await connect(gw.boundPort); // no token → userId null
+    await waitFor(ws, texts, (m) => m.t === "welcome");
+    // Give the connect path time to finish (snapshot + viewerCount + the gauge
+    // branch, which must be skipped for an anonymous viewer).
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(texts.filter((m) => m.t === "gauge").length, 0);
+    ws.close();
+  } finally {
+    await gw.stop();
+  }
+});
+
 /** Poll a predicate to true (used for the fire-and-forget placement handler). */
 async function waitForCondition(pred: () => boolean): Promise<void> {
   for (let i = 0; i < 200; i++) {

@@ -33,8 +33,10 @@ import {
   SessionGauge,
   StaticGaugeBonusSource,
   IoredisGaugeGrantRunner,
+  IoredisGaugePeekRunner,
   type GaugeBonusSource,
   type GaugeGrantRunner,
+  type GaugePeekRunner,
 } from "./gaugeBonus";
 import { DeltaCoalescer } from "./coalescer";
 import { SeqRingBuffer } from "./ringBuffer";
@@ -108,6 +110,8 @@ export class Gateway {
   private readonly moderation: ModerationService;
   /** Atomic charge-grant on the live gauge for the tier-claim seam (FEN-130). */
   private readonly gaugeGrant: GaugeGrantRunner;
+  /** Read-only gauge snapshot for the initial `gauge` frame on connect (FEN-184). */
+  private readonly gaugePeek: GaugePeekRunner;
 
   private flushTimer?: ReturnType<typeof setInterval>;
   private presenceTimer?: ReturnType<typeof setInterval>;
@@ -141,6 +145,7 @@ export class Gateway {
       paletteSize: PALETTE_SIZE,
     });
     this.gaugeGrant = new IoredisGaugeGrantRunner(this.redis.cmd);
+    this.gaugePeek = new IoredisGaugePeekRunner(this.redis.cmd);
     this.wireUpgrade();
   }
 
@@ -548,10 +553,43 @@ export class Gateway {
       if (this.lastBroadcastViewerCount >= 0) {
         conn.sendJson({ t: "viewerCount", count: this.lastBroadcastViewerCount });
       }
+      await this.sendInitialGauge(conn);
     } catch (err) {
       console.warn(`[gateway] failed to send initial state: ${(err as Error).message}`);
       conn.sendJson({ t: "error", code: "internal", message: "could not load canvas" });
       conn.ws.close(1011, "initial state failed");
+    }
+  }
+
+  /**
+   * Push the viewer's CURRENT gauge as the first `gauge` frame (FEN-184). The
+   * `welcome` frame implies "ready" but carries no charge count, and a gauge frame
+   * is otherwise emitted only after a placement (`ack`) or a tier claim — so a
+   * fresh authenticated session can never make that first placement: the client
+   * gates the canvas on a known gauge (`placeState.ts`: `gauge === null` ⇒ the
+   * indefinite "loading"/"La fresque arrive…" state) and refuses the tap, which
+   * deadlocks placement. A read-only `refill-peek` (no consume, no persist) gives
+   * the live charges/cooldown to render immediately.
+   *
+   * Anonymous viewers (`userId === null`) never place, so they need no gauge. The
+   * effective max may still be at the base if the per-session F6 bonus refresh has
+   * not resolved yet; that only understates a bonus until the next gauge frame
+   * (place ack / tier claim) re-states it — it never blocks placement. Best-effort:
+   * a peek failure is logged and skipped, never fatal to the connection.
+   */
+  private async sendInitialGauge(conn: Connection): Promise<void> {
+    if (conn.user.userId === null) return;
+    try {
+      const gaugeParams: GaugeParams = { ...this.cfg.gauge.base, gaugeMax: conn.gauge.effectiveGaugeMax };
+      const snap = await this.gaugePeek.peek(conn.user.userId, gaugeParams, Date.now());
+      conn.sendJson({
+        t: "gauge",
+        charges: snap.charges,
+        max: snap.max,
+        cooldownUntil: snap.cooldownUntil,
+      });
+    } catch (err) {
+      console.warn(`[gateway] initial gauge send failed for ${conn.user.userId}: ${(err as Error).message}`);
     }
   }
 

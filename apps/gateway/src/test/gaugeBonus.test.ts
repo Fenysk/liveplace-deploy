@@ -11,6 +11,7 @@ import {
   StaticGaugeBonusSource,
   SessionGauge,
   IoredisGaugeGrantRunner,
+  IoredisGaugePeekRunner,
   type ConvexQueryClient,
   type GaugeBonusSource,
 } from "../gaugeBonus";
@@ -158,6 +159,40 @@ test("grant runner reloads the script once on NOSCRIPT and retries", async () =>
   const runner = new IoredisGaugeGrantRunner(fake as never);
   const out = await runner.grant("user-Z", GP, 2, 1_700_000_000_000);
   assert.deepEqual(out, { charges: 20, max: 21, cooldownUntil: 1_700_000_030_000 });
+  assert.equal(fake.loads, 2); // initial LOAD + reload on NOSCRIPT
+  assert.equal(fake.calls.length, 2); // first throws, second succeeds
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IoredisGaugePeekRunner (initial gauge frame on connect, FEN-184) — the
+// read-only refill-peek seam. Same {script, evalsha} discipline as the grant
+// runner; reuses FakeGrantRedis since the surface is identical.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("peek runner forwards (gaugeKey, now, interval, amount, max) and parses the snapshot", async () => {
+  // A never-placed user reads as conceptually full at the effective max.
+  const fake = new FakeGrantRedis([21, 21, 0]);
+  const runner = new IoredisGaugePeekRunner(fake as never);
+  const out = await runner.peek("user-Z", GP, 1_700_000_000_000);
+  assert.deepEqual(out, { charges: 21, max: 21, cooldownUntil: 0 });
+  assert.equal(fake.loads, 1); // SCRIPT LOAD once
+  assert.equal(fake.calls.length, 1);
+  const [call] = fake.calls;
+  assert.ok(call);
+  assert.equal(call.numKeys, 1);
+  // KEYS[1] = the per-user gauge hash; ARGV = [now, interval, amount, effMax].
+  // No consume/grant arg — the peek is read-only.
+  assert.equal(call.args[0], userGaugeKey("user-Z"));
+  assert.deepEqual(call.args.slice(1), [
+    "1700000000000", String(GP.refillIntervalMs), String(GP.refillAmount), "21",
+  ]);
+});
+
+test("peek runner reloads the script once on NOSCRIPT and retries", async () => {
+  const fake = new FakeGrantRedis([3, 21, 1_700_000_030_000], "NOSCRIPT No matching script");
+  const runner = new IoredisGaugePeekRunner(fake as never);
+  const out = await runner.peek("user-Z", GP, 1_700_000_000_000);
+  assert.deepEqual(out, { charges: 3, max: 21, cooldownUntil: 1_700_000_030_000 });
   assert.equal(fake.loads, 2); // initial LOAD + reload on NOSCRIPT
   assert.equal(fake.calls.length, 2); // first throws, second succeeds
 });
