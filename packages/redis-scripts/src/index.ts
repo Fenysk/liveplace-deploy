@@ -18,6 +18,7 @@ export {
   type StoredGauge,
   DEFAULT_GAUGE,
   refillGauge,
+  grantCharges,
   nextRefillAt,
 } from "./gauge";
 
@@ -32,6 +33,14 @@ export const PLACE_LUA: string = loadScript("place.lua");
 
 /** Read-only gauge snapshot for display (current/max/countdown). */
 export const REFILL_PEEK_LUA: string = loadScript("refill-peek.lua");
+
+/**
+ * Atomic grant of N charges to a user's gauge (tier claim, Lot D / FEN-130).
+ * Refills to `now`, adds `grant` charges clamped to the effective max, persists.
+ * Used by the gateway's `/internal/gauge/claim` seam after Convex confirms a
+ * tier claim — the celebration's +1 usable charge. Load once, then EVALSHA.
+ */
+export const GRANT_LUA: string = loadScript("grant.lua");
 
 /**
  * Atomic bulk overwrite + fan-out for the moderation suite (F8.1/F8.2/F8.3:
@@ -339,6 +348,34 @@ export function peekArgs(opts: {
       String(opts.gauge.refillIntervalMs),
       String(opts.gauge.refillAmount),
       String(opts.gauge.gaugeMax),
+    ],
+  };
+}
+
+/**
+ * Build args for grant.lua (tier claim, FEN-130).
+ * KEYS = [userGaugeKey]; ARGV = [now, interval, amount, gaugeMax, grant, ttl].
+ * `gauge.gaugeMax` MUST be the effective max (base + the just-raised bonus) the
+ * gateway resolves after the claim; the script clamps the grant to it. `grant`
+ * is the number of charges to add (the claim's `granted` delta, board default 1).
+ * The reply is the same `[charges, max, cooldownUntil]` shape as refill-peek
+ * (parse with `parsePeekResult`) — a post-grant gauge snapshot to push to the client.
+ */
+export function grantArgs(opts: {
+  nowMs: number;
+  gauge: GaugeParams;
+  userId: string;
+  grant: number;
+}): { keys: [string]; argv: string[] } {
+  return {
+    keys: [userGaugeKey(opts.userId)],
+    argv: [
+      String(opts.nowMs),
+      String(opts.gauge.refillIntervalMs),
+      String(opts.gauge.refillAmount),
+      String(opts.gauge.gaugeMax),
+      String(opts.grant),
+      String(opts.gauge.gaugeTtlMs),
     ],
   };
 }

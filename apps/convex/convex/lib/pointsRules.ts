@@ -55,7 +55,11 @@ export interface StatsShape {
   gaugeMaxBonus: number;
 }
 
-export type PointsRuleCode = "cap_reached" | "insufficient_points" | "invalid_config";
+export type PointsRuleCode =
+  | "cap_reached"
+  | "insufficient_points"
+  | "invalid_config"
+  | "tier_not_earned";
 
 export class PointsRuleError extends Error {
   readonly code: PointsRuleCode;
@@ -142,4 +146,106 @@ export function evaluatePurchase(stats: StatsShape, cfg: PointsConfig = DEFAULT_
     return { ok: false, reason: "insufficient_points", cost, newBonus: gaugeMaxBonus, newPoints: points };
   }
   return { ok: true, cost, newBonus: gaugeMaxBonus + 1, newPoints: points - cost };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tier claim (Lot D / FEN-130) — the board-locked viewer-facing progression.
+//
+// The board (Alexis, 2026-06-03, FEN-83 ux-spec §V2.2) replaced the *spend*
+// model above (no points/no shop for the viewer) with a **claim de palier**: the
+// viewer only ever sees their gauge; playing accrues `pointsEarned` (leaderboard,
+// untouched) and crossing a tier threshold makes a +1-max claim available, which
+// the viewer encashes with an explicit gesture. Contract: docs/contracts/tier-claim.md.
+//
+// The tier threshold curve REUSES the cumulative upgrade-cost curve so the
+// economy stays continuous with F6: tier n is earned once `pointsEarned` reaches
+// the sum of the first n upgrade costs, `Σ_{i=1..n} baseUpgradeCost·i =
+// baseUpgradeCost · n(n+1)/2`. Capped at `gaugeMaxBonusCap`. The pure
+// purchase/cost helpers above are retained because they *define* that curve
+// (`nextUpgradeCost`) and remain unit-tested; only the viewer-facing spend sink
+// (`purchaseGaugeUpgrade`) is gone from points.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cumulative `pointsEarned` required to have earned tier `n` (1-based):
+ * `Σ_{i=1..n} baseUpgradeCost·i = baseUpgradeCost · n(n+1)/2`. `tierThreshold(0)`
+ * is 0 (no play needed for "zero tiers earned"). Monotonic strictly increasing
+ * in `n`, which is what makes `tiersEarned` a clean inverse.
+ */
+export function tierThreshold(n: number, cfg: PointsConfig = DEFAULT_POINTS_CONFIG): number {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new PointsRuleError("invalid_config", `tier index must be a non-negative integer; got ${n}.`);
+  }
+  return (cfg.baseUpgradeCost * n * (n + 1)) / 2;
+}
+
+/**
+ * Number of tiers a user has *earned* by playing, derived from their lifetime
+ * `pointsEarned`: the largest `n` with `tierThreshold(n) ≤ pointsEarned`, capped
+ * at `gaugeMaxBonusCap`. Monotonic in `pointsEarned` (it only ever grows, like
+ * the underlying counter), so the returned `earned` is itself monotonic — the
+ * client relies on that to never roll its claim cursor back.
+ */
+export function tiersEarned(pointsEarned: number, cfg: PointsConfig = DEFAULT_POINTS_CONFIG): number {
+  if (!Number.isFinite(pointsEarned) || pointsEarned < 0) return 0;
+  let n = 0;
+  while (n < cfg.gaugeMaxBonusCap && tierThreshold(n + 1, cfg) <= pointsEarned) n++;
+  return n;
+}
+
+/** The minimal stats the tier-claim decision reasons about. */
+export interface TierStatsShape {
+  /** Lifetime points earned (leaderboard signal). Drives `earned`. */
+  pointsEarned: number;
+  /** Tiers already applied to the gauge max (== `confirmed`). 0..cap. */
+  gaugeMaxBonus: number;
+}
+
+export interface TierClaimDecision {
+  /** True when this claim must WRITE (first application of `tierIndex`). */
+  ok: boolean;
+  /** True when the claim is a safe no-op (`tierIndex ≤ confirmed`, already applied). */
+  noop: boolean;
+  /** Set only when the claim is REJECTED (a hard error — `tierIndex > earned`). */
+  reason?: Extract<PointsRuleCode, "tier_not_earned" | "invalid_config">;
+  /** `gaugeMaxBonus` after applying (== current bonus on a no-op or reject). */
+  newBonus: number;
+  /** Charges to push to the live gauge = `newBonus − currentBonus` (board default: +1/tier). */
+  granted: number;
+}
+
+/**
+ * Decide a single `claimTier(tierIndex)` against the durable stats. PURE so the
+ * Convex mutation applies it inside one transaction (idempotent by index — see
+ * the contract). Three outcomes:
+ *
+ *  - **reject** (`ok:false, reason:"tier_not_earned"`): `tierIndex > earned` — the
+ *    viewer cannot encash a tier they have not unlocked by playing.
+ *  - **no-op** (`ok:false, noop:true`): `tierIndex ≤ confirmed` — already applied;
+ *    a reconnect replaying the same index lands here and the caller returns the
+ *    current bonus unchanged (idempotency).
+ *  - **apply** (`ok:true`): `confirmed < tierIndex ≤ earned`. The bonus advances to
+ *    `tierIndex` (target-level), granting `tierIndex − confirmed` charges. The
+ *    client emits ops in ascending order so this is normally exactly +1; treating
+ *    `tierIndex` as the target level (rather than a blind +1) keeps the result
+ *    idempotent AND order-insensitive: a higher index advances; a lower one that
+ *    arrives afterwards is a no-op — no tier is double-counted either way.
+ */
+export function evaluateTierClaim(
+  stats: TierStatsShape,
+  tierIndex: number,
+  cfg: PointsConfig = DEFAULT_POINTS_CONFIG,
+): TierClaimDecision {
+  const confirmed = stats.gaugeMaxBonus;
+  if (!Number.isInteger(tierIndex) || tierIndex < 1) {
+    return { ok: false, noop: false, reason: "invalid_config", newBonus: confirmed, granted: 0 };
+  }
+  const earned = tiersEarned(stats.pointsEarned, cfg);
+  if (tierIndex > earned) {
+    return { ok: false, noop: false, reason: "tier_not_earned", newBonus: confirmed, granted: 0 };
+  }
+  if (tierIndex <= confirmed) {
+    return { ok: false, noop: true, newBonus: confirmed, granted: 0 };
+  }
+  return { ok: true, noop: false, newBonus: tierIndex, granted: tierIndex - confirmed };
 }
