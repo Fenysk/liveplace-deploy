@@ -95,13 +95,20 @@ function renderHud(s: HudState, locale: typeof en | typeof fr): RenderedHud {
 
 // ── scenarios (the real pose-viewer flow, desktop + mobile) ──────────────────
 
+// Mirror of validate()'s commit-toast choice (FEN-124 U7 residual): a committed
+// batch that contains any erase reads "updated", a place-only batch reads
+// "placed" — so an all-erase commit isn't mislabelled as posed.
+const commitToastKey = (hasErase: boolean): keyof typeof en =>
+  hasErase ? "canvas.feedback.updated" : "canvas.feedback.placed";
+
 const STATES: HudState[] = [
   { label: "initial (idle, charges available)", drawing: false, armed: false, count: 0, capacity: 0, charges: 10, max: 16, locked: false, belowTarget: false },
   { label: "mobile — first tap, cell armed (U1)", drawing: false, armed: true, count: 0, capacity: 10, charges: 10, max: 16, locked: false, belowTarget: false },
   { label: "mobile — armed at low zoom (U1+U5)", drawing: false, armed: true, count: 0, capacity: 10, charges: 10, max: 16, locked: false, belowTarget: true },
   { label: "batch building (3 staged)", drawing: true, armed: false, count: 3, capacity: 10, charges: 10, max: 16, locked: false, belowTarget: false },
   { label: "draw mode, batch empty after commit (U4)", drawing: true, armed: false, count: 0, capacity: 10, charges: 10, max: 16, locked: false, belowTarget: false },
-  { label: "commit acknowledged (U7)", drawing: true, armed: false, count: 0, capacity: 10, charges: 7, max: 16, locked: false, belowTarget: false, toast: { key: "canvas.feedback.placed", params: { count: 3 }, success: true } },
+  { label: "commit acknowledged — placed (U7)", drawing: true, armed: false, count: 0, capacity: 10, charges: 7, max: 16, locked: false, belowTarget: false, toast: { key: commitToastKey(false), params: { count: 3 }, success: true } },
+  { label: "commit acknowledged — all-erase batch (U7 erase copy)", drawing: true, armed: false, count: 0, capacity: 10, charges: 10, max: 16, locked: false, belowTarget: false, toast: { key: commitToastKey(true), params: { count: 3 }, success: true } },
 ];
 
 // ── assertions (a refinement regression fails the run) ───────────────────────
@@ -132,8 +139,14 @@ for (const locale of [en, fr] as const) {
   check(!/touche|tap/i.test(hint), `[${name}] U6: batch hint must be device-neutral, got: "${hint}"`);
 
   const success = renderHud(STATES[5]!, locale);
-  // U7: positive success acknowledgement of the commit.
+  // U7: positive success acknowledgement of a place commit.
   check(success.toast?.variant === "success", `[${name}] U7: commit must raise a success toast`);
+  check(success.toast?.text === tr(locale, commitToastKey(false), { count: 3 }), `[${name}] U7: place-only commit must read "placed"`);
+
+  // U7 erase copy: an all-erase commit must read "updated", never "placed".
+  const erase = renderHud(STATES[6]!, locale);
+  check(erase.toast?.text === tr(locale, "canvas.feedback.updated", { count: 3 }), `[${name}] U7-erase: all-erase commit must read "updated"`);
+  check(erase.toast?.text !== success.toast?.text, `[${name}] U7-erase: erase ack must differ from place ack`);
 }
 
 // ── emit the matrix ──────────────────────────────────────────────────────────

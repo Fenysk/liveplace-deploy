@@ -206,9 +206,17 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       const msg = placement.place(cell.x, cell.y, cell.color);
       if (msg) netRef.current?.place(msg);
     }
-    // Light positive acknowledgement of the commit (Peak-End, U7).
+    // Light positive acknowledgement of the commit (Peak-End, U7). A batch that
+    // contains any erase didn't only "place" pixels — say "mis à jour / updated"
+    // so an all-erase (or mixed) commit isn't mislabelled as posed (FEN-124 U7
+    // residual, UX-accepted copy reco).
     if (cells.length > 0) {
-      showToast({ kind: "placed", messageKey: "canvas.feedback.placed", params: { count: cells.length } });
+      const hasErase = cells.some((c) => c.color === EMPTY_COLOR);
+      showToast({
+        kind: "placed",
+        messageKey: hasErase ? "canvas.feedback.updated" : "canvas.feedback.placed",
+        params: { count: cells.length },
+      });
       // The pixel lands optimistically right now — that's the "aha" moment.
       emit({ type: "commit" });
       emit({ type: "placed" });

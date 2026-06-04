@@ -59,6 +59,7 @@ export const en = {
   "canvas.feedback.error": "Couldn't place that pixel — try again",
   "canvas.feedback.capReached": "Gauge full ({max}) — confirm or remove a pixel",
   "canvas.feedback.placed": "✓ {count} placed",
+  "canvas.feedback.updated": "✓ {count} updated",
 
   // Batch pose: "selection → validation" model (FEN-113, refinements FEN-124)
   "canvas.draw": "Draw",

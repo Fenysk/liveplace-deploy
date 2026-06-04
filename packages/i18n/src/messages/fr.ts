@@ -55,6 +55,7 @@ export const fr: Catalog = {
   "canvas.feedback.error": "Impossible de poser ce pixel — réessaie",
   "canvas.feedback.capReached": "Jauge pleine ({max}) — valide ou retire une case",
   "canvas.feedback.placed": "✓ {count} posé·s",
+  "canvas.feedback.updated": "✓ {count} mis à jour",
 
   // Pose en lot : modèle « sélection → validation » (FEN-113, raffinements FEN-124)
   "canvas.draw": "Dessiner",
