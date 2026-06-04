@@ -18,13 +18,13 @@
  * Every user string flows through `@canvas/i18n` so the UI is FR/EN in place.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { useTranslate } from "@canvas/i18n/react";
 import type { MessageKey } from "@canvas/i18n";
 import type { GaugeState } from "@canvas/protocol";
 import { AuthButton } from "../../auth/AuthButton.js";
-import { authClient, signInWithTwitch } from "../../auth/auth-client.js";
+import { authClient, fetchConvexToken, signInWithTwitch } from "../../auth/auth-client.js";
 import { LanguageSwitcher } from "@canvas/i18n/react";
 import { Link } from "../../router.js";
 import { paths } from "../../routes.js";
@@ -152,6 +152,19 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const { data: session } = authClient.useSession();
   const authedRef = useRef(false);
   authedRef.current = session != null;
+
+  // The canvas WebSocket carries the Convex JWT so the gateway can resolve the
+  // viewer's `userId` and serve a per-user gauge (FEN-184). Gate the token on
+  // Convex's OWN confirmed auth state (`useConvexAuth`), NOT the Better Auth
+  // session: after the Twitch redirect the session flips authenticated ~1s before
+  // the Convex client has fetched + had the backend validate the JWT, and
+  // `authClient.convex.token()` only resolves a token once that handshake lands
+  // (the same race that blanked the page in FEN-182). Read through a ref so the
+  // net client's `fetchTicket` (bound once) always sees the live value, and drive
+  // a reconnect from the effect below whenever it flips.
+  const { isAuthenticated: convexAuthed } = useConvexAuth();
+  const convexAuthedRef = useRef(convexAuthed);
+  convexAuthedRef.current = convexAuthed;
 
   const [gauge, setGauge] = useState<GaugeState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -554,6 +567,11 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
 
     const net = new CanvasNetClient({
       url: gatewayWsUrl(slug),
+      // Authenticated socket: hand the gateway the live Convex JWT, but only once
+      // Convex itself has confirmed auth (the token isn't resolvable before that).
+      // Tokenless ⇒ anonymous read-only viewer. The reconnect effect below re-runs
+      // this with the real token the moment `convexAuthed` flips (FEN-184).
+      fetchTicket: () => (convexAuthedRef.current ? fetchConvexToken() : Promise.resolve(null)),
       handlers: {
         onWelcome: (w) => {
           if (!placementRef.current) {
@@ -605,6 +623,25 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       placementRef.current = null;
     };
   }, [slug, showToast, stageCell, validate, cancel, emit, bumpActivity]);
+
+  // Re-authenticate the socket when Convex auth flips (FEN-184). The mount effect
+  // above connects exactly once — anonymously on the post-OAuth landing, because
+  // the JWT isn't resolvable yet. When Convex confirms auth (~1s later), reconnect
+  // so `fetchTicket` re-runs and the socket carries the token: the gateway then
+  // resolves `userId` and serves the per-user gauge that lifts the indicator out
+  // of "loading". On sign-out it flips back to false → reconnect drops to the
+  // anonymous read-only socket. Skip the very first run (the mount connect owns
+  // the initial open) so we don't double-connect; only act on an actual change.
+  const prevConvexAuthedRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevConvexAuthedRef.current === null) {
+      prevConvexAuthedRef.current = convexAuthed;
+      return;
+    }
+    if (prevConvexAuthedRef.current === convexAuthed) return;
+    prevConvexAuthedRef.current = convexAuthed;
+    netRef.current?.reconnect();
+  }, [convexAuthed]);
 
   // Cooldown view-state at component scope: read by the per-second tick re-render
   // and by the FEN-118 "gauge-empty" anticipation nudge below. Based on the real

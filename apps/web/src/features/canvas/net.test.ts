@@ -134,7 +134,7 @@ test("a reconnect resyncs from the cursor and fires onReconnected", async () => 
   assert.ok(h.events.includes("reconnected"));
 });
 
-test("the auth ticket is appended as a query param", async () => {
+test("the Convex JWT is appended as the ?token= query param (gateway extractToken)", async () => {
   const seen: string[] = [];
   const client = new CanvasNetClient({
     url: "wss://host/canvas/main/ws",
@@ -147,7 +147,35 @@ test("the auth ticket is appended as a query param", async () => {
     handlers: {},
   });
   await client.connect();
-  assert.equal(seen[0], "wss://host/canvas/main/ws?ticket=T0KEN");
+  assert.equal(seen[0], "wss://host/canvas/main/ws?token=T0KEN");
+});
+
+test("reconnect() re-opens with a freshly resolved token (auth state change, FEN-184)", async () => {
+  const seen: string[] = [];
+  let token: string | null = null; // anonymous first (JWT not ready post-OAuth)
+  const sockets: FakeSocket[] = [];
+  const client = new CanvasNetClient({
+    url: "wss://host/canvas/main/ws",
+    fetchTicket: async () => token,
+    socketFactory: (url) => {
+      seen.push(url);
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    },
+    setTimer: () => 0,
+    handlers: {},
+  });
+  await client.connect();
+  assert.equal(seen[0], "wss://host/canvas/main/ws"); // anonymous read-only
+
+  // The Convex JWT becomes available; the app calls reconnect().
+  token = "JWT123";
+  client.reconnect();
+  await Promise.resolve(); // let the async connect() resolve the token
+  assert.equal(seen[1], "wss://host/canvas/main/ws?token=JWT123");
+  // The stale anonymous socket was closed so it can't keep receiving frames.
+  assert.equal(sockets.length, 2);
 });
 
 test("a moderationEvent bumps bulkChangeSeq and fires onModerationEvent (FEN-163)", async () => {

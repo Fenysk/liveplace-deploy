@@ -24,6 +24,30 @@ export const authClient = createAuthClient({
 export const TWITCH_PROVIDER = "twitch" as const;
 
 /**
+ * Resolve the current Convex JWT, or `null` when signed out / not yet issued.
+ *
+ * This is the SAME token `ConvexBetterAuthProvider` hands to Convex queries
+ * (`authClient.convex.token()`, added by the `convexClient()` plugin), so the
+ * gateway — which verifies the JWT offline against Convex JWKS (same issuer /
+ * audience) — accepts it for an authenticated WebSocket. The canvas net client
+ * appends it as `?token=` so a signed-in viewer's socket carries identity and
+ * the gateway can resolve `userId` (and thus a per-user gauge). Tokenless ⇒
+ * anonymous read-only (FEN-184). Never throws — a failure degrades to anonymous.
+ */
+export async function fetchConvexToken(): Promise<string | null> {
+  try {
+    const { data } = await (
+      authClient as unknown as {
+        convex: { token: (opts?: unknown) => Promise<{ data?: { token?: string | null } }> };
+      }
+    ).convex.token({ fetchOptions: { throw: false } });
+    return data?.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Start the Twitch OAuth flow. Redirects to Twitch consent and returns to
  * `callbackURL` once Better Auth has created/loaded the session.
  */

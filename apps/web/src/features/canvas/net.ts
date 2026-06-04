@@ -3,8 +3,8 @@
  *
  * Responsibilities (the transport half; the optimism/rollback half is
  * {@link OptimisticPlacement} in `placement.ts`):
- *   - open the gateway socket (optional single-use auth ticket, anonymous
- *     read-only fallback), `binaryType = "arraybuffer"`;
+ *   - open the gateway socket (optional Convex JWT, anonymous read-only
+ *     fallback), `binaryType = "arraybuffer"`;
  *   - route incoming frames: binary `snapshot`(0x01)/`delta`(0x02) → the renderer,
  *     text `ack`/`error`/`cooldown`/`gauge` → the placement controller,
  *     `welcome`/`viewerCount`/`resyncRequired`/`pong` → handled here;
@@ -16,9 +16,12 @@
  *   - on reconnect, fire `onReconnected` so the caller re-sends un-acked ops with
  *     their ORIGINAL `cid` (CA5 exactly-once via the gateway's `SET NX`).
  *
- * It does NOT redefine the wire contract — only consumes it. The auth ticket is
- * a transport detail (a `?ticket=` query param), not a protocol frame: the
- * pre-FEN-63 `hello` handshake is gone; the gateway pushes `welcome` on connect.
+ * It does NOT redefine the wire contract — only consumes it. The auth token is
+ * a transport detail (a `?token=` query param carrying the Convex JWT the gateway
+ * verifies offline against Convex JWKS — see apps/gateway/src/{auth,gateway}.ts
+ * `extractToken`), not a protocol frame: the pre-FEN-63 `hello` handshake is gone;
+ * the gateway pushes `welcome` on connect. A tokenless connect is admitted as an
+ * anonymous read-only viewer (FEN-184).
  */
 import {
   binaryOpcode,
@@ -84,8 +87,12 @@ export interface CanvasNetOptions {
   url: string;
   handlers: CanvasNetHandlers;
   /**
-   * Resolve a single-use auth ticket, appended as `?ticket=`; anonymous (null)
-   * read-only fallback. Defaults to POST `/api/ws-ticket`.
+   * Resolve the Convex JWT for this connection, appended as `?token=` (the param
+   * the gateway's `extractToken` reads). Return `null` for an anonymous read-only
+   * connection. Defaults to anonymous: the SPA-direct architecture has no
+   * `/api/ws-ticket` host, so the app injects a provider that reads the live
+   * Convex JWT (`authClient.convex.token()`), gated on `useConvexAuth()` — see
+   * CanvasView (FEN-184).
    */
   fetchTicket?: () => Promise<string | null>;
   /** Injectable socket constructor for tests; defaults to the global WebSocket. */
@@ -98,14 +105,15 @@ export interface CanvasNetOptions {
 
 const OPEN = 1; // WebSocket.OPEN
 
+/**
+ * Default token resolver: anonymous read-only. There is no `/api/ws-ticket` host
+ * in the SPA-direct Convex Better Auth architecture (FEN-184); the app supplies a
+ * provider that returns the live Convex JWT instead (see CanvasView). Connecting
+ * without a token is a valid anonymous viewer, so the fallback is `null`, never a
+ * doomed fetch to a non-existent endpoint.
+ */
 async function defaultFetchTicket(): Promise<string | null> {
-  try {
-    const res = await fetch("/api/ws-ticket", { method: "POST" });
-    if (!res.ok) return null;
-    return ((await res.json()) as { ticket?: string }).ticket ?? null;
-  } catch {
-    return null; // anonymous read-only fallback
-  }
+  return null;
 }
 
 export class CanvasNetClient {
@@ -139,7 +147,7 @@ export class CanvasNetClient {
     if (this.stopped) return;
 
     const url = ticket
-      ? `${this.opts.url}${this.opts.url.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`
+      ? `${this.opts.url}${this.opts.url.includes("?") ? "&" : "?"}token=${encodeURIComponent(ticket)}`
       : this.opts.url;
 
     const socket = this.socketFactory(url);
@@ -222,6 +230,28 @@ export class CanvasNetClient {
     this.handlers.onStatus?.("closed");
     if (this.stopped) return;
     this.setTimer(() => void this.connect(), this.reconnectDelayMs);
+  }
+
+  /**
+   * Force an immediate reconnect, re-running {@link fetchTicket}. Used when the
+   * auth state changes (FEN-184): the post-OAuth landing connects anonymously
+   * ~1s before the Convex JWT is available, and sign-out must drop back to the
+   * anonymous read-only socket. Closing the current socket without re-running the
+   * backoff (we reconnect now, not after `reconnectDelayMs`) keeps the swap quick;
+   * the gateway re-sends `welcome` on the new connection, so geometry/state heal.
+   * A no-op once {@link disconnect} has stopped the client.
+   */
+  reconnect(): void {
+    if (this.stopped) return;
+    const stale = this.socket;
+    this.socket = null;
+    if (stale) {
+      // Detach the close handler so its scheduled-backoff reconnect can't race
+      // the immediate one we fire here (which carries the fresh token).
+      stale.onclose = null;
+      stale.close();
+    }
+    void this.connect();
   }
 
   /** Send a `place` op (from {@link OptimisticPlacement.place}). */
