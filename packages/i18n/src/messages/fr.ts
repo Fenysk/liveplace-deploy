@@ -65,6 +65,13 @@ export const fr: Catalog = {
   "canvas.batchHint": "Sélectionne une case, puis Valider",
   "canvas.zoomHint": "Zoome pour poser avec précision",
 
+  // Pose au clavier + annonces lecteur d'écran (FEN-123, WCAG 2.1.1 / 4.1.3)
+  "canvas.canvasLabel": "Canevas de pixels",
+  "canvas.keyboardHelp":
+    "Utilise les flèches pour viser une case, maintiens Maj pour aller plus vite. Entrée ou Espace pour sélectionner, moins et plus pour zoomer, Échap pour effacer, et Ctrl+Entrée pour valider.",
+  "canvas.cursorAt": "Case {x}, {y}",
+  "canvas.cursorAtStaged": "Case {x}, {y}, sélectionnée",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profil introuvable",
   "profile.memberSince": "Membre depuis {date}",

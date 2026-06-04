@@ -50,6 +50,11 @@ export interface CanvasViewProps {
 
 export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement {
   const t = useTranslate();
+  // The renderer's keyboard hooks are bound once; read the latest translator
+  // through a ref so a mid-session locale switch keeps announcements localized
+  // without tearing down the renderer.
+  const tRef = useRef(t);
+  tRef.current = t;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const netRef = useRef<CanvasNetClient | null>(null);
@@ -87,6 +92,7 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [viewers, setViewers] = useState<number | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [announce, setAnnounce] = useState(""); // polite SR readout of the keyboard cursor (U3)
   const [selVersion, setSelVersion] = useState(0); // bumped on every batch change
   const [, setTick] = useState(0); // drives the per-second cooldown countdown
 
@@ -234,6 +240,18 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
           rendererRef.current?.setOverlay(selectionRef.current.entries(), cell);
         },
         onScaleClass: setBelowTarget,
+        // Keyboard roving cursor (FEN-123): same stage/validate/cancel gestures
+        // as the pointer (true 3-modality parity) + a polite SR announce of the
+        // targeted cell and whether it's already staged.
+        onCursorMove: (cell) => {
+          hoverRef.current = cell;
+          rendererRef.current?.setOverlay(selectionRef.current.entries(), cell);
+          const staged = selectionRef.current.has(cell.x, cell.y);
+          setAnnounce(tRef.current(staged ? "canvas.cursorAtStaged" : "canvas.cursorAt", cell));
+        },
+        onActivate: (x, y) => stageCell(x, y),
+        onCancel: () => cancel(),
+        onValidate: () => validate(),
       },
       { interactive: true },
     );
@@ -281,7 +299,7 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       netRef.current = null;
       placementRef.current = null;
     };
-  }, [slug, showToast, stageCell]);
+  }, [slug, showToast, stageCell, validate, cancel]);
 
   const onCooldown = gauge !== null && gauge.charges <= 0 && gauge.cooldownUntil > Date.now();
   const cooldownSeconds = onCooldown ? Math.max(0, Math.ceil((gauge!.cooldownUntil - Date.now()) / 1000)) : 0;
@@ -292,7 +310,24 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
 
   return (
     <div className="lp-app">
-      <canvas ref={canvasRef} className="lp-canvas" />
+      {/* Focusable interactive grid: role="application" so a screen reader passes
+          arrow keys straight to the roving cursor instead of its browse mode.
+          Named + described for the text alternative (U3). */}
+      <canvas
+        ref={canvasRef}
+        className="lp-canvas"
+        tabIndex={0}
+        role="application"
+        aria-label={t("canvas.canvasLabel")}
+        aria-describedby="lp-canvas-help"
+      />
+      <p id="lp-canvas-help" className="lp-sr-only">
+        {t("canvas.keyboardHelp")}
+      </p>
+      {/* Polite readout of the keyboard cursor cell (and whether it's staged). */}
+      <p className="lp-sr-only" aria-live="polite">
+        {announce}
+      </p>
 
       <div className="lp-topbar">
         {viewers !== null && <span className="lp-pill">{t("canvas.viewers", { count: viewers })}</span>}
@@ -310,7 +345,7 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       <div className="lp-hud">
         <h1>{t("app.title")}</h1>
 
-        <p className={`lp-gauge${onCooldown ? " is-empty" : ""}`}>
+        <p className={`lp-gauge${onCooldown ? " is-empty" : ""}`} aria-live="polite">
           {gauge === null
             ? t("canvas.connecting")
             : onCooldown

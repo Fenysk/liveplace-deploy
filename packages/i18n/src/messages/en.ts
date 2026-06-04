@@ -69,6 +69,13 @@ export const en = {
   "canvas.batchHint": "Select a cell, then Confirm",
   "canvas.zoomHint": "Zoom in to place precisely",
 
+  // Keyboard pose + screen-reader announcements (FEN-123, WCAG 2.1.1 / 4.1.3)
+  "canvas.canvasLabel": "Pixel canvas",
+  "canvas.keyboardHelp":
+    "Use the arrow keys to aim a cell, hold Shift to move faster. Press Enter or Space to select, minus and plus to zoom, Escape to clear, and Ctrl+Enter to confirm.",
+  "canvas.cursorAt": "Cell {x}, {y}",
+  "canvas.cursorAtStaged": "Cell {x}, {y}, selected",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profile not found",
   "profile.memberSince": "Member since {date}",

@@ -56,6 +56,22 @@ export interface RendererHooks {
    * before posing (FEN-124 U5). Not fired in non-interactive (OBS) mode.
    */
   onScaleClass?: (belowTouchTarget: boolean) => void;
+  /**
+   * Keyboard roving-cursor moved onto cell (x,y) (FEN-123). Distinct from
+   * {@link onHover} so the UI can announce the keyboard target (aria-live)
+   * without the mouse-hover firehose. The cell is always in-bounds.
+   */
+  onCursorMove?: (cell: { x: number; y: number }) => void;
+  /**
+   * Keyboard activate (Enter / Space) on the roving-cursor cell — the keyboard
+   * equivalent of a pointer tap. Wired to the SAME stage gesture as the pointer
+   * so the three modalities share one BatchSelection (true parity).
+   */
+  onActivate?: (x: number, y: number) => void;
+  /** Keyboard Escape — cancel the staged batch (forgiveness; WCAG no-trap). */
+  onCancel?: () => void;
+  /** Keyboard validate shortcut (Ctrl/Cmd+Enter) — commit the staged batch. */
+  onValidate?: () => void;
 }
 
 /** A staged cell drawn as a preview rectangle (FEN-113 selection overlay). */
@@ -88,6 +104,8 @@ const GRID_STYLE = "rgba(0,0,0,0.28)";
 
 const DRAG_THRESHOLD_PX = 4; // movement beyond this turns a click into a pan
 const TOUCH_TARGET_CSS_PX = 24; // below this on-screen cell size, posing is imprecise (FEN-124 U5)
+const KEY_ZOOM_STEP = 1.4; // scale multiplier per +/- keypress (FEN-123)
+const KEY_PAN_MARGIN_CELLS = 1; // keep the cursor this many cells off the edge
 
 /** The fixed palette as CSS hex strings, for the swatch UI (computed once). */
 export const PALETTE_HEX: readonly string[] = PALETTE.map(
@@ -140,6 +158,12 @@ export class CanvasRenderer {
   // last reported "cell smaller than the touch target" class, so onScaleClass
   // fires only on a real crossing rather than every frame (FEN-124 U5).
   private lastBelowTarget: boolean | null = null;
+
+  // keyboard roving cursor (FEN-123) — the focused cell the arrow keys move. It
+  // reuses the `hoverCell` overlay frame (recognition over recall) so a
+  // keyboard-only / switch-access viewer can aim, stage and validate with no
+  // pointer. Null until the canvas is first driven by the keyboard.
+  private cursor: { x: number; y: number } | null = null;
 
   private readonly interactive: boolean;
   private readonly background: string | null;
@@ -450,6 +474,7 @@ export class CanvasRenderer {
     this.canvas.addEventListener("pointercancel", this.onPointerCancel);
     this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    this.canvas.addEventListener("keydown", this.onKeyDown);
     // Suppress the browser's own pinch-zoom / scroll so two-finger gestures drive
     // the canvas view instead of the page (mobile parity).
     this.canvas.style.touchAction = "none";
@@ -462,6 +487,7 @@ export class CanvasRenderer {
     this.canvas.removeEventListener("pointercancel", this.onPointerCancel);
     this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvas.removeEventListener("keydown", this.onKeyDown);
   }
 
   /** Device-pixel position of a pointer event, viewport-relative. */
@@ -584,4 +610,123 @@ export class CanvasRenderer {
     this.view.zoomAt(deviceX, deviceY, factor);
     this.dirty = true;
   };
+
+  // --- keyboard roving cursor (FEN-123, WCAG 2.1.1 / 4.1.3) -----------------
+
+  /**
+   * Drive the canvas entirely from the keyboard so a pointer-free / switch-access
+   * viewer reaches the same {@link import("./selection.js").BatchSelection} as a
+   * mouse or touch user. Arrows move the roving cursor (Shift = ×10 leap),
+   * Enter/Space stages it (a tap), Ctrl/Cmd+Enter validates, Escape cancels,
+   * +/- zoom on the cursor. Unhandled keys (Tab, etc.) pass through untouched so
+   * focus is never trapped.
+   */
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (!this.loaded || e.altKey) return;
+    const step = e.shiftKey ? 10 : 1;
+    switch (e.key) {
+      case "ArrowLeft":
+        this.moveCursor(-step, 0);
+        break;
+      case "ArrowRight":
+        this.moveCursor(step, 0);
+        break;
+      case "ArrowUp":
+        this.moveCursor(0, -step);
+        break;
+      case "ArrowDown":
+        this.moveCursor(0, step);
+        break;
+      case "Enter":
+        if (e.ctrlKey || e.metaKey) {
+          this.hooks.onValidate?.();
+        } else {
+          const c = this.ensureCursor();
+          this.hooks.onActivate?.(c.x, c.y);
+        }
+        break;
+      case " ":
+      case "Spacebar": {
+        const c = this.ensureCursor();
+        this.hooks.onActivate?.(c.x, c.y);
+        break;
+      }
+      case "Escape":
+        this.hooks.onCancel?.();
+        break;
+      case "+":
+      case "=":
+        this.zoomCursor(KEY_ZOOM_STEP);
+        break;
+      case "-":
+      case "_":
+        this.zoomCursor(1 / KEY_ZOOM_STEP);
+        break;
+      default:
+        return; // not ours — let the browser handle it (no focus trap)
+    }
+    e.preventDefault();
+  };
+
+  /** Lazily place the cursor at the centre of what's on screen, then report it. */
+  private ensureCursor(): { x: number; y: number } {
+    if (!this.cursor || !this.inBoard(this.cursor.x, this.cursor.y)) {
+      const mid = this.view.cellAt(this.canvas.width / 2, this.canvas.height / 2);
+      this.cursor = mid ?? { x: Math.floor(this.width / 2), y: Math.floor(this.height / 2) };
+      this.syncCursor();
+    }
+    return this.cursor;
+  }
+
+  /** Move the roving cursor by a cell delta, clamped to the board, and follow it. */
+  private moveCursor(dx: number, dy: number): void {
+    // The very first arrow only *reveals* the cursor (at screen centre) so it
+    // doesn't jump and double-announce; subsequent presses move it.
+    const fresh = !this.cursor || !this.inBoard(this.cursor.x, this.cursor.y);
+    const cur = this.ensureCursor();
+    if (fresh) return;
+    const nx = Math.min(this.width - 1, Math.max(0, cur.x + dx));
+    const ny = Math.min(this.height - 1, Math.max(0, cur.y + dy));
+    if (nx === cur.x && ny === cur.y) return;
+    this.cursor = { x: nx, y: ny };
+    this.scrollCursorIntoView();
+    this.syncCursor();
+  }
+
+  /** Zoom on the cursor cell so the keyboard target stays put while zooming. */
+  private zoomCursor(factor: number): void {
+    const c = this.ensureCursor();
+    const s = this.view.scale;
+    this.view.zoomAt(this.view.tx + (c.x + 0.5) * s, this.view.ty + (c.y + 0.5) * s, factor);
+    this.scrollCursorIntoView();
+    this.dirty = true;
+  }
+
+  /** Pan the view so the cursor cell sits a margin inside the viewport. */
+  private scrollCursorIntoView(): void {
+    if (!this.cursor) return;
+    const s = this.view.scale;
+    const m = KEY_PAN_MARGIN_CELLS * s;
+    const left = this.view.tx + this.cursor.x * s;
+    const top = this.view.ty + this.cursor.y * s;
+    let dx = 0;
+    let dy = 0;
+    if (left < m) dx = m - left;
+    else if (left + s > this.canvas.width - m) dx = this.canvas.width - m - (left + s);
+    if (top < m) dy = m - top;
+    else if (top + s > this.canvas.height - m) dy = this.canvas.height - m - (top + s);
+    if (dx || dy) this.view.panBy(dx, dy);
+  }
+
+  /** Paint the cursor as the hover frame and report it to the UI (aria-live). */
+  private syncCursor(): void {
+    if (!this.cursor) return;
+    this.hoverCell = this.cursor;
+    this.dirty = true;
+    this.hooks.onCursorMove?.({ ...this.cursor });
+  }
+
+  private inBoard(x: number, y: number): boolean {
+    return x >= 0 && y >= 0 && x < this.width && y < this.height;
+  }
 }

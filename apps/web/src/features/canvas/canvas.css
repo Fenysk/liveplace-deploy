@@ -11,6 +11,22 @@
   font-family: system-ui, sans-serif;
 }
 
+/* Visually-hidden but exposed to assistive tech: carries the canvas keyboard
+   instructions (text alternative) and the polite cursor announcements (FEN-123,
+   U3). Not a visual token — this is a11y plumbing the behaviour depends on. */
+.lp-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .lp-canvas {
   display: block;
   width: 100%;
