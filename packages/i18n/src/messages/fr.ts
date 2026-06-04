@@ -78,6 +78,7 @@ export const fr: Catalog = {
   "canvas.claim.available": "Réserve +1 !",
   "canvas.claim.stacked": "{count} paliers à encaisser",
   "canvas.claim.action": "Agrandir ma réserve",
+  "canvas.claim.actionOne": "Agrandir ma réserve (+1)",
   "canvas.claim.all": "Tout encaisser ({count})",
   "canvas.claim.celebrate": "Réserve agrandie — {max} pixels !",
 

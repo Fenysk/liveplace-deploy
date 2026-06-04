@@ -54,8 +54,12 @@ function hud(cat: Catalog, opts: { charges: number; serverMax: number; tier: Tie
       pending > 1
         ? `<button class="lp-btn lp-claim-all">${esc(tr(cat, "canvas.claim.all", { count: pending }))}</button>`
         : "";
+    // FEN-140 #4: when stacked, the primary signals it claims ONE tier (+1) so the
+    // one-by-one vs. "tout encaisser" choice is legible. FEN-140 #2: the persistent
+    // claim signal is a standing affordance, not a live region (no role="status").
+    const action = pending > 1 ? tr(cat, "canvas.claim.actionOne") : tr(cat, "canvas.claim.action");
     claim = `<div class="lp-claim"><span class="lp-claim-label">${esc(label)}</span>` +
-      `<button class="lp-btn is-primary lp-claim-btn">${esc(tr(cat, "canvas.claim.action"))}</button>${all}</div>`;
+      `<button class="lp-btn is-primary lp-claim-btn">${esc(action)}</button>${all}</div>`;
   }
   const cel = celebrate ? `<div class="lp-celebrate" style="position:static;margin-top:10px">${esc(celebrate)}</div>` : "";
   return `<div class="lp-hud" style="position:static;max-width:none">` +

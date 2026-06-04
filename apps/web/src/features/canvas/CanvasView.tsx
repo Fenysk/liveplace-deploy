@@ -114,6 +114,12 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const [tierVersion, setTierVersion] = useState(0);
   const [celebrate, setCelebrate] = useState(false);
   const bumpTier = useCallback(() => setTierVersion((n) => n + 1), []);
+  // Focus continuity for the encash gesture (FEN-140 #1): when a claim empties
+  // the signal, its focused button unmounts and focus would fall to <body>. We
+  // move focus to the (always-mounted) gauge — the réserve that just grew — so
+  // keyboard/SR users keep their place right after the dopamine moment.
+  const gaugeRef = useRef<HTMLParagraphElement>(null);
+  const restoreClaimFocusRef = useRef(false);
 
   // Adaptive just-in-time onboarding (FEN-118): a behaviour-driven coach decides
   // which (non-blocking) contextual hint to surface at each funnel step. Implicit
@@ -261,6 +267,8 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     const op = tierRef.current.claimNext();
     if (!op) return;
     void tierSourceRef.current.claim(op);
+    // Claiming the last pending tier unmounts the claim signal — anchor focus.
+    if (tierRef.current.pending === 0) restoreClaimFocusRef.current = true;
     setCelebrate(true);
     bumpTier();
     refreshCap();
@@ -271,6 +279,8 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     const ops = tierRef.current.claimAll();
     if (ops.length === 0) return;
     for (const op of ops) void tierSourceRef.current.claim(op);
+    // "Tout encaisser" always empties the signal → its buttons unmount.
+    restoreClaimFocusRef.current = true;
     setCelebrate(true);
     bumpTier();
     refreshCap();
@@ -289,6 +299,16 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     const id = setTimeout(() => setCelebrate(false), TOAST_MS);
     return () => clearTimeout(id);
   }, [celebrate]);
+
+  // Focus continuity after an encash (FEN-140 #1): once the claim signal has
+  // emptied (its button unmounted), move focus to the gauge so it never lands
+  // on <body>. Keyed on tierVersion so it runs after the claim re-render.
+  useEffect(() => {
+    if (restoreClaimFocusRef.current && tierRef.current.pending === 0) {
+      restoreClaimFocusRef.current = false;
+      gaugeRef.current?.focus();
+    }
+  }, [tierVersion]);
 
   // Subscribe to tier progression. Snapshots fold into the controller; a server
   // confirmation that advances the applied count shrinks the optimistic overlay.
@@ -536,7 +556,12 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       <div className="lp-hud">
         <h1>{t("app.title")}</h1>
 
-        <p className={`lp-gauge${onCooldown ? " is-empty" : ""}`} aria-live="polite">
+        <p
+          ref={gaugeRef}
+          tabIndex={-1}
+          className={`lp-gauge${onCooldown ? " is-empty" : ""}`}
+          aria-live="polite"
+        >
           {gauge === null
             ? t("canvas.connecting")
             : onCooldown
@@ -549,14 +574,19 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
         {/* Lot D — claim signal: non-blocking, persistent, stackable. The viewer
             encashes a tier earned by playing; nothing else (no points/shop). */}
         {pendingTiers > 0 && (
-          <div className="lp-claim" role="status">
+          // No live role here (FEN-140 #2): the claim signal is a standing
+          // affordance, not an alert, so it must not re-announce on every
+          // `pending` decrement. The celebration is the single claim announcement.
+          <div className="lp-claim">
             <span className="lp-claim-label">
               {pendingTiers > 1
                 ? t("canvas.claim.stacked", { count: pendingTiers })
                 : t("canvas.claim.available")}
             </span>
+            {/* Primary claims ONE tier — when stacked, signal the "+1" so it reads
+                as one-by-one vs. "tout encaisser" all-at-once (FEN-140 #4). */}
             <button type="button" className="lp-btn is-primary lp-claim-btn" onClick={claimNext}>
-              {t("canvas.claim.action")}
+              {pendingTiers > 1 ? t("canvas.claim.actionOne") : t("canvas.claim.action")}
             </button>
             {pendingTiers > 1 && (
               <button type="button" className="lp-btn lp-claim-all" onClick={claimAll}>

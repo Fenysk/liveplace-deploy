@@ -134,10 +134,17 @@ html.lp-obs-root body {
   flex-wrap: wrap;
 }
 .lp-btn {
+  /* ≥44px touch floor for operability/Fitts (FEN-140 #3), matching the nav fix
+     from FEN-133. inline-flex keeps the label centred now that min-height drives
+     the box rather than padding alone. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   background: rgba(0, 0, 0, 0.6);
   color: #eee;
   border: 1px solid #333;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 8px;
   cursor: pointer;
   font: inherit;

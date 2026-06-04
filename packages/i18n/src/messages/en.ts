@@ -82,6 +82,7 @@ export const en = {
   "canvas.claim.available": "Reserve +1 unlocked!",
   "canvas.claim.stacked": "{count} reserve upgrades to claim",
   "canvas.claim.action": "Grow my reserve",
+  "canvas.claim.actionOne": "Grow my reserve (+1)",
   "canvas.claim.all": "Claim all ({count})",
   "canvas.claim.celebrate": "Reserve grown — {max} pixels!",
 
