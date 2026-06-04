@@ -32,13 +32,23 @@ export async function signInWithTwitch(callbackURL = "/"): Promise<void> {
 }
 
 /**
- * Sign out, then hard-reload the page (R2b / CA6). The reload guarantees every
- * piece of in-memory auth/session/Convex state is dropped and the app
- * re-renders cleanly as an anonymous visitor.
+ * Sign out without a hard reload (FEN-115 / Lot B).
+ *
+ * The earlier R2b/CA6 implementation force-reloaded the page so every piece of
+ * in-memory auth/session/Convex state was dropped. That is no longer needed:
+ * Better Auth's `useSession()` is reactive, so the session flips to `null` in
+ * place and `ConvexBetterAuthProvider` drops the JWT, returning the app to the
+ * anonymous (read-only) view-first state without a full navigation. Placement
+ * stays server-authoritative, so a stale client could never place after
+ * sign-out regardless of the reload. Removing the reload keeps the canvas
+ * WebSocket and the live view alive — consistent with the view-first model.
  */
-export async function signOutAndReload(): Promise<void> {
+export async function signOut(): Promise<void> {
   await authClient.signOut();
-  if (typeof window !== "undefined") {
-    window.location.reload();
-  }
 }
+
+/**
+ * @deprecated Use {@link signOut}. Retained as a thin alias for any caller that
+ * still imports the reload-based name; it no longer reloads (FEN-115).
+ */
+export const signOutAndReload = signOut;

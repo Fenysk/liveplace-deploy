@@ -22,11 +22,13 @@ import { useTranslate } from "@canvas/i18n/react";
 import type { MessageKey } from "@canvas/i18n";
 import type { GaugeState } from "@canvas/protocol";
 import { AuthButton } from "../../auth/AuthButton.js";
+import { authClient, signInWithTwitch } from "../../auth/auth-client.js";
 import { LanguageSwitcher } from "@canvas/i18n/react";
 import { CanvasRenderer, PALETTE_HEX } from "./renderer.js";
 import { CanvasNetClient, type ConnectionStatus } from "./net.js";
 import { OptimisticPlacement, type PlacementFeedback } from "./placement.js";
 import { BatchSelection, EMPTY_COLOR } from "./selection.js";
+import { gateInteraction, type CanvasInteraction } from "./authGate.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
@@ -68,6 +70,15 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   drawingRef.current = drawing;
   const [armed, setArmed] = useState<{ x: number; y: number } | null>(null);
 
+  // View-first auth (FEN-115): anonymous viewers watch/zoom/pick-colour freely;
+  // the FIRST account-requiring interaction (enter draw mode / stage the first
+  // cell, not only the commit) triggers the quasi-instant Twitch consent and
+  // returns to this same canvas. Mirrored into a ref so the renderer's tap
+  // callback (bound once) always reads the live session.
+  const { data: session } = authClient.useSession();
+  const authedRef = useRef(false);
+  authedRef.current = session != null;
+
   const [gauge, setGauge] = useState<GaugeState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [viewers, setViewers] = useState<number | null>(null);
@@ -85,9 +96,30 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     setToast({ kind: f.kind, messageKey: f.messageKey, params: f.params });
   }, []);
 
+  // Gate an account-requiring interaction (FEN-115). Anonymous viewers are sent
+  // to the quasi-instant Twitch consent with a callback back to THIS canvas;
+  // returns false so the caller stops (the redirect takes over). Cancelling at
+  // Twitch is non-punitive — the viewer simply returns here in read-only mode.
+  const requireAccount = useCallback(
+    (interaction: CanvasInteraction): boolean => {
+      const decision = gateInteraction(interaction, authedRef.current, {
+        slug,
+        currentPath: typeof window !== "undefined" ? window.location.pathname : "/",
+      });
+      if (decision.kind === "consent") {
+        void signInWithTwitch(decision.callbackURL);
+        return false;
+      }
+      return true;
+    },
+    [slug],
+  );
+
   // Stage / toggle / recolor a cell with the current tool (the batch gesture).
   const stageCell = useCallback(
     (x: number, y: number) => {
+      // First account-requiring interaction → consent (not only at commit).
+      if (!requireAccount("stage-cell")) return;
       const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
       const r = selectionRef.current.apply(x, y, c);
       if (r.kind === "cap") {
@@ -97,11 +129,14 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       }
       syncOverlay();
     },
-    [showToast, syncOverlay],
+    [requireAccount, showToast, syncOverlay],
   );
 
   // Commit the whole batch: one place{cid} per cell, reconciled per cid.
   const validate = useCallback(() => {
+    // Defense in depth: a batch can only exist post-consent, but never commit
+    // anonymously regardless of how the cells got staged.
+    if (!requireAccount("validate")) return;
     const placement = placementRef.current;
     if (!placement) return;
     const cells = selectionRef.current.take();
@@ -111,7 +146,7 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     }
     setArmed(null);
     syncOverlay();
-  }, [syncOverlay]);
+  }, [requireAccount, syncOverlay]);
 
   // Annuler: empty the batch and leave draw mode.
   const cancel = useCallback(() => {
@@ -273,6 +308,9 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
               type="button"
               className="lp-btn is-primary"
               onClick={() => {
+                // Entering draw mode is itself an account-requiring interaction
+                // (FEN-115): gate before staging so the redirect fires early.
+                if (!requireAccount("enter-draw")) return;
                 setDrawing(true);
                 stageCell(armed.x, armed.y);
                 setArmed(null);
