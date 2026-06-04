@@ -61,6 +61,18 @@ export interface CanvasNetHandlers {
   onViewerCount?: (count: number) => void;
   /** The gateway will replace the canvas with a fresh snapshot (resync failed). */
   onResyncRequired?: () => void;
+  /**
+   * A server-initiated bulk overwrite (moderation wipe / ban-and-wipe) just
+   * changed the fresco for everyone — the `moderationEvent` attribution frame the
+   * raw deltas lack (FEN-156 / contract §"Viewer fan-out side-effect"). The net
+   * layer keeps a monotonic `bulkChangeSeq` and bumps it ONCE per such frame, then
+   * fires this with the bumped counter plus the frame's informational
+   * `version`/`cells`. Crucially it is NOT bumped for the client's own reconnect
+   * `resyncRequired` (a NETWORK event) — that path never reaches here — so a blip
+   * never reads as moderation. {@link CanvasView} feeds the counter into
+   * `deriveModerationNotice` and `areaChanged` lights up (UX Lot I / FEN-121).
+   */
+  onModerationEvent?: (ev: { bulkChangeSeq: number; version: number; cells: number }) => void;
   /** Connection lifecycle, for the "connecting…/offline" UI. */
   onStatus?: (status: ConnectionStatus) => void;
   /** Fired after a RE-connect's welcome: re-send the un-acked resend queue. */
@@ -105,6 +117,7 @@ export class CanvasNetClient {
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
 
   private appliedSeq = 0; // highest write seq applied (resync cursor)
+  private bulkChangeSeq = 0; // monotonic count of server-initiated bulk overwrites (moderation)
   private gotWelcome = false; // distinguishes first connect from a reconnect
   private everConnected = false;
   private stopped = false;
@@ -171,6 +184,18 @@ export class CanvasNetClient {
         // the caller repaints its pending optimistic pixels onto the new base.
         this.handlers.onResyncRequired?.();
         break;
+      case "moderationEvent":
+        // A moderation bulk overwrite (wipe / ban-and-wipe). Distinct from the
+        // reconnect `resyncRequired` above (a network event), this is the
+        // *attribution* the deltas lack: bump the monotonic counter once and hand
+        // it to the viewer-legibility reducer so `areaChanged` can light up.
+        this.bulkChangeSeq += 1;
+        this.handlers.onModerationEvent?.({
+          bulkChangeSeq: this.bulkChangeSeq,
+          version: msg.version,
+          cells: msg.cells,
+        });
+        break;
       case "pong":
         break;
     }
@@ -211,6 +236,11 @@ export class CanvasNetClient {
   /** Highest write seq applied (resync cursor) — exposed for tests/diagnostics. */
   get cursor(): number {
     return this.appliedSeq;
+  }
+
+  /** Monotonic count of moderation bulk overwrites observed — for tests/diagnostics. */
+  get bulkCursor(): number {
+    return this.bulkChangeSeq;
   }
 
   /** True once the current connection's `welcome` has landed. */

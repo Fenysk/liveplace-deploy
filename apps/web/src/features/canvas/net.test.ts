@@ -32,6 +32,7 @@ interface Harness {
   events: string[];
   binaries: ArrayBuffer[];
   placement: ServerMessage[];
+  moderation: { bulkChangeSeq: number; version: number; cells: number }[];
 }
 
 function makeHarness(opts: { ticket?: string | null } = {}): Harness {
@@ -39,6 +40,7 @@ function makeHarness(opts: { ticket?: string | null } = {}): Harness {
   const events: string[] = [];
   const binaries: ArrayBuffer[] = [];
   const placement: ServerMessage[] = [];
+  const moderation: { bulkChangeSeq: number; version: number; cells: number }[] = [];
   const client = new CanvasNetClient({
     url: "wss://host/canvas/main/ws",
     fetchTicket: async () => opts.ticket ?? null,
@@ -54,6 +56,7 @@ function makeHarness(opts: { ticket?: string | null } = {}): Harness {
       onStatus: (s) => events.push(`status:${s}`),
       onViewerCount: (n) => events.push(`viewers:${n}`),
       onResyncRequired: () => events.push("resyncRequired"),
+      onModerationEvent: (ev) => moderation.push(ev),
       onBinary: (buf) => {
         binaries.push(buf);
         // pretend the renderer applied it up to the frame's seq (bytes 1..4 BE)
@@ -62,7 +65,7 @@ function makeHarness(opts: { ticket?: string | null } = {}): Harness {
       onPlacementFrame: (m) => placement.push(m),
     },
   });
-  return { client, sockets, events, binaries, placement };
+  return { client, sockets, events, binaries, placement, moderation };
 }
 
 test("welcome sets the resync cursor and fires onWelcome", async () => {
@@ -145,4 +148,35 @@ test("the auth ticket is appended as a query param", async () => {
   });
   await client.connect();
   assert.equal(seen[0], "wss://host/canvas/main/ws?ticket=T0KEN");
+});
+
+test("a moderationEvent bumps bulkChangeSeq and fires onModerationEvent (FEN-163)", async () => {
+  const h = makeHarness();
+  await h.client.connect();
+  h.sockets[0]!.open();
+  assert.equal(h.client.bulkCursor, 0);
+
+  h.sockets[0]!.emit(JSON.stringify({ t: "moderationEvent", version: 99, cells: 240 }));
+  assert.equal(h.client.bulkCursor, 1);
+  assert.deepEqual(h.moderation, [{ bulkChangeSeq: 1, version: 99, cells: 240 }]);
+
+  // each subsequent wipe advances the monotonic counter (drives `areaChanged`)
+  h.sockets[0]!.emit(JSON.stringify({ t: "moderationEvent", version: 105, cells: 12 }));
+  assert.equal(h.client.bulkCursor, 2);
+  assert.equal(h.moderation.at(-1)!.bulkChangeSeq, 2);
+});
+
+test("a reconnect resync does NOT bump bulkChangeSeq (network ≠ moderation, FEN-163)", async () => {
+  const h = makeHarness();
+  await h.client.connect();
+  h.sockets[0]!.open();
+  h.sockets[0]!.emit(JSON.stringify({ t: "welcome", protocolVersion: 1, width: 4, height: 4, cooldownUntil: 0, seq: 1 }));
+
+  // a resyncRequired + a fresh snapshot frame (the reconnect path) is a NETWORK
+  // event: it must leave the moderation counter untouched so it never reads as
+  // a wipe (the exact anxiety UX Lot I avoids).
+  h.sockets[0]!.emit(JSON.stringify({ t: "resyncRequired" }));
+  h.sockets[0]!.emit(encodeSnapshot(new Uint8Array(16), 7, 4, 4));
+  assert.equal(h.client.bulkCursor, 0);
+  assert.equal(h.moderation.length, 0);
 });

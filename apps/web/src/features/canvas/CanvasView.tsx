@@ -145,6 +145,10 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const [gauge, setGauge] = useState<GaugeState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [viewers, setViewers] = useState<number | null>(null);
+  // Monotonic count of server-initiated moderation bulk overwrites (wipe /
+  // ban-and-wipe), bumped by net.ts on each `moderationEvent` frame (FEN-163).
+  // Feeds the viewer-legibility reducer so `areaChanged` lights up (Lot I, FEN-121).
+  const [bulkChangeSeq, setBulkChangeSeq] = useState(0);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [announce, setAnnounce] = useState(""); // polite SR readout of the keyboard cursor (U3)
   const [selVersion, setSelVersion] = useState(0); // bumped on every batch change
@@ -560,6 +564,10 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
         },
         onPlacementFrame: (msg) => placementRef.current?.handle(msg),
         onViewerCount: setViewers,
+        // A moderation bulk overwrite landed: surface the net layer's monotonic
+        // counter so the liveness effect below fires the `areaChanged` notice. A
+        // reconnect resync never reaches here, so a network blip stays silent.
+        onModerationEvent: (ev) => setBulkChangeSeq(ev.bulkChangeSeq),
         onReconnected: () => {
           const q = placementRef.current?.resendQueue() ?? [];
           for (const m of q) netRef.current?.place(m);
@@ -639,26 +647,26 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   cooldownSecondsRef.current = cooldownView?.secondsUntilNext ?? 0;
 
   // Viewer legibility of moderation events (Lot I, FEN-121): explain a collective
-  // event without jargon or anxiety. The frozen/reopen transition is the signal
-  // the frozen protocol lets the viewer observe today (via canPlace →
-  // placement_closed → the `frozen` state); a wipe's `areaChanged` notice is
-  // wired the same way once a moderation-event frame exists (deriveModerationNotice
-  // already models it — see the protocol follow-up). Kept out of the unified
-  // place-state indicator: this is a transient "something happened" banner, not
-  // the standing "can I place?" answer, and it announces politely (never an alert).
+  // event without jargon or anxiety. Two signals feed the reducer: the
+  // frozen/reopen transition (via canPlace → placement_closed → the `frozen`
+  // state) and the wipe `areaChanged` signal — the monotonic `bulkChangeSeq` the
+  // net layer bumps on each server-initiated `moderationEvent` frame (FEN-163,
+  // distinct from a reconnect resync). Kept out of the unified place-state
+  // indicator: this is a transient "something happened" banner, not the standing
+  // "can I place?" answer, and it announces politely (never an alert).
   const prevLivenessRef = useRef<CanvasLiveness>({ frozen: false, bulkChangeSeq: 0 });
   const [modNotice, setModNotice] = useState<MessageKey | null>(null);
   const frozenNow = placeState.kind === "frozen";
   useEffect(() => {
     const prev = prevLivenessRef.current;
-    const next: CanvasLiveness = { frozen: frozenNow, bulkChangeSeq: prev.bulkChangeSeq };
+    const next: CanvasLiveness = { frozen: frozenNow, bulkChangeSeq };
     const notice = deriveModerationNotice(prev, next);
     prevLivenessRef.current = next;
     if (!notice) return;
     setModNotice(notice.messageKey);
     const timer = setTimeout(() => setModNotice(null), notice.autoDismissMs);
     return () => clearTimeout(timer);
-  }, [frozenNow]);
+  }, [frozenNow, bulkChangeSeq]);
 
   // Onboarding: arrival nudge + start the hesitation clock, once per mount.
   useEffect(() => {
