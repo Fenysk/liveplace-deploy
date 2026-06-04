@@ -4,7 +4,7 @@
  * The streamer's home base: ONE active canvas promoted to the top (its live
  * status, visibility and "Live now" badge answer F11 "what's online right now"),
  * with the read-only archives listed below. From the active card the streamer
- * reaches Broadcast (OBS, WF-7) and Configure in one click, and can freeze/reopen
+ * reaches Broadcast (OBS, WF-7) in one click, and can freeze/reopen
  * placement inline (the in-scope `setPlacementOpen`; the full crisis surface is
  * Lot I / FEN-121). Archives can be reactivated (`activateCanvas`, one-active
  * invariant enforced server-side).
@@ -16,6 +16,7 @@
  * go through `t(...)` for FR↔EN parity. Inline styles, like the rest of the shell
  * (the fine UI pass is delegated — Designer / Phase 3).
  */
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { useLocale, useTranslate } from "@canvas/i18n/react";
@@ -84,13 +85,45 @@ export function DashboardPage(): React.ReactElement {
   const setPlacement = useMutation(setPlacementOpen);
   const activate = useMutation(activateCanvas);
 
+  // Polite SR announcement for freeze/reopen + reactivate (S9 / FEN-143). These
+  // mutations only re-render a label, which screen readers don't announce; an
+  // aria-live region gives non-visual users the same confirmation the page does.
+  const [announce, setAnnounce] = useState("");
+
   const view = buildDashboardView(
     docs?.map(toStreamerCanvas),
     { isSignedIn: isSignedIn && !isPending },
   );
+  const activeTitle = view.state === "ready" ? view.active?.canvas.title ?? null : null;
+
+  /** Reopen/freeze placement on the active canvas, announcing the new state. */
+  function toggleFreeze(canvasId: string, open: boolean): void {
+    void setPlacement({ canvasId, open });
+    setAnnounce(t(open ? "studio.announce.reopened" : "studio.announce.frozen"));
+  }
+
+  /**
+   * Reactivate an archive. Because of the one-active invariant this silently
+   * archives whatever is live now (a footgun mid-stream), so when there IS a
+   * current active canvas we confirm the swap first (forgiveness — Norman), then
+   * announce the result for sighted and SR users alike (S1 / S9 / FEN-143).
+   */
+  function reactivate(canvas: StreamerCanvas): void {
+    if (
+      activeTitle &&
+      !window.confirm(t("studio.archives.reactivateConfirm", { active: activeTitle, next: canvas.title }))
+    ) {
+      return;
+    }
+    void activate({ canvasId: canvas.id });
+    setAnnounce(t("studio.announce.activated", { title: canvas.title }));
+  }
 
   return (
     <section style={pageStyle} aria-label={t("studio.title")}>
+      <p style={srOnlyStyle} role="status" aria-live="polite">
+        {announce}
+      </p>
       <header style={headerStyle}>
         <h1 style={titleStyle}>{t("studio.title")}</h1>
         {isSignedIn && (
@@ -121,15 +154,15 @@ export function DashboardPage(): React.ReactElement {
           {view.active ? (
             <ActiveCard
               active={view.active}
-              onToggleFreeze={(open) =>
-                void setPlacement({ canvasId: view.active!.canvas.id, open })
-              }
+              onToggleFreeze={(open) => toggleFreeze(view.active!.canvas.id, open)}
             />
           ) : (
+            // Has archives but nothing active — neutral copy + CTA, NOT the
+            // greenfield "create your FIRST canvas" (S6 / FEN-143).
             <div style={emptyStyle}>
-              <p style={mutedStyle}>{t("studio.empty.body")}</p>
+              <p style={mutedStyle}>{t("studio.noActive.body")}</p>
               <Link to={paths.studioCreate()} style={primaryBtnStyle}>
-                {t("studio.empty.cta")}
+                {t("studio.new")}
               </Link>
             </div>
           )}
@@ -143,7 +176,7 @@ export function DashboardPage(): React.ReactElement {
                 <ArchiveRow
                   key={row.canvas.id}
                   row={row}
-                  onReactivate={() => void activate({ canvasId: row.canvas.id })}
+                  onReactivate={() => reactivate(row.canvas)}
                 />
               ))}
             </ul>
@@ -296,8 +329,17 @@ const actionRowStyle: React.CSSProperties = {
   gap: "0.5rem",
   flexWrap: "wrap",
 };
+// Shared ≥44×44px hit-area floor (WCAG 2.5.5 — S3 / FEN-143, same rule as the
+// Lot G global-nav `navTapTargetStyle`). inline-flex + minHeight gives the
+// <a>/<button> a full touch target independent of the delegated visual pass.
+const tapFloor: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minHeight: 44,
+};
 const primaryBtnStyle: React.CSSProperties = {
-  display: "inline-block",
+  ...tapFloor,
   padding: "0.5rem 1.1rem",
   borderRadius: 8,
   border: "1px solid #6441a5",
@@ -308,7 +350,7 @@ const primaryBtnStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 const secondaryBtnStyle: React.CSSProperties = {
-  display: "inline-block",
+  ...tapFloor,
   padding: "0.5rem 1.1rem",
   borderRadius: 8,
   border: "1px solid #c7c7d1",
@@ -319,13 +361,24 @@ const secondaryBtnStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 const tertiaryBtnStyle: React.CSSProperties = {
-  padding: "0.35rem 0.75rem",
+  ...tapFloor,
+  minWidth: 44,
+  padding: "0.35rem 0.9rem",
   borderRadius: 7,
   border: "1px solid #d4d4dc",
   background: "#fafafb",
   color: "#444",
   fontSize: 13,
   cursor: "pointer",
+};
+/** Off-screen text exposed only to assistive tech (no global stylesheet here). */
+const srOnlyStyle: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
 };
 const archiveListStyle: React.CSSProperties = {
   listStyle: "none",
@@ -348,6 +401,8 @@ const archiveRowStyle: React.CSSProperties = {
 const archiveLinkStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  justifyContent: "center",
+  minHeight: 44,
   gap: 2,
   textDecoration: "none",
   color: "inherit",
