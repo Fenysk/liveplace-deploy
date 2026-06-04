@@ -142,6 +142,9 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   // (non-blocking, persistent, stackable) claim signal; `tierVersion` forces a
   // HUD refresh whenever progression or the optimistic overlay changes.
   const tierRef = useRef<TierClaim>(new TierClaim());
+  // Tracks the previous pending-tier count so the onboarding coach can fire the
+  // "1ᵉʳ seuil" hint exactly when a palier first becomes claimable (0 → >0).
+  const prevPendingRef = useRef(0);
   const tierSourceRef = useRef<TierSource>(tierSource);
   tierSourceRef.current = tierSource;
   const [tierVersion, setTierVersion] = useState(0);
@@ -400,13 +403,23 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   refreshCapRef.current = refreshCap;
   useEffect(() => {
     tierRef.current = new TierClaim();
+    prevPendingRef.current = 0;
     const unsub = tierSource.subscribe((p) => {
       tierRef.current.sync(p);
+      const pending = tierRef.current.pending;
+      // First palier to become claimable: coach the *active* claim gesture
+      // just-in-time (Lot D model = "encaisser", not passive growth). The coach
+      // shows it once and persists "seen", so re-entry on later tiers is inert.
+      if (pending > 0 && prevPendingRef.current === 0) emit({ type: "tier-available" });
+      prevPendingRef.current = pending;
       bumpTier();
       refreshCapRef.current();
     });
     return unsub;
-  }, [tierSource, bumpTier]);
+    // `emit` is a stable useCallback (empty deps): adding it to the deps keeps
+    // exhaustive-deps happy without ever re-firing this effect — so the optimistic
+    // overlay still survives (we read `refreshCap` through its ref, never the dep).
+  }, [tierSource, bumpTier, emit]);
 
   // Tick once a second while on cooldown so the countdown re-renders.
   useEffect(() => {
@@ -599,15 +612,10 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     wasCooldownRef.current = onCooldown;
   }, [onCooldown, cooldownSeconds, emit]);
 
-  // First reserve growth (Lot D claim / points threshold): show the causality once.
-  const prevMaxRef = useRef<number | null>(null);
-  useEffect(() => {
-    const max = gauge?.max ?? null;
-    if (max != null && prevMaxRef.current != null && max > prevMaxRef.current) {
-      emit({ type: "gauge-grew", params: { max } });
-    }
-    if (max != null) prevMaxRef.current = max;
-  }, [gauge, emit]);
+  // NB: the "1ᵉʳ seuil" hint is no longer fired on reserve-max growth — that fires
+  // *after* a claim and merely echoes `canvas.claim.celebrate`. It is now emitted
+  // from the tierSource subscription the instant a palier becomes claimable, so the
+  // coach teaches the active "encaisser" gesture before the viewer acts (FEN-141).
 
   const sel = selectionRef.current;
   const count = sel.count; // re-read each render; selVersion forces the refresh

@@ -132,13 +132,22 @@ test("hesitation: idle offers help once for a novice; a wall offers it even to a
   assert.equal(pro.send({ type: "blocked-attempt" })?.step, "hesitation", "but a wall still offers help");
 });
 
-test("gauge-grew surfaces the reserve-threshold causality hint once, with params", () => {
+test("tier-available coaches the active claim gesture once, when a palier first becomes claimable", () => {
   const coach = new OnboardingCoach();
-  const grew = coach.send({ type: "gauge-grew", params: { max: 6 } });
-  assert.equal(grew?.step, "pointsThreshold");
-  assert.equal(grew?.params?.max, 6);
+  const avail = coach.send({ type: "tier-available" });
+  // The "1ᵉʳ seuil" step teaches the encaisser action (Lot D), not passive growth.
+  assert.equal(avail?.step, "pointsThreshold");
+  // No dead {max} param: the copy teaches the gesture, it has no placeholder.
+  assert.equal(avail?.params, undefined);
   coach.clearActive();
-  assert.equal(coach.send({ type: "gauge-grew" }), null, "shown once");
+  assert.equal(coach.send({ type: "tier-available" }), null, "shown once — absorbed");
+});
+
+test("tier-available is not re-surfaced in a returning session (persisted as seen)", () => {
+  const storage = fakeStorage();
+  assert.equal(new OnboardingCoach({ storage }).send({ type: "tier-available" })?.step, "pointsThreshold");
+  // A fresh coach hydrated from the same storage must not re-show it.
+  assert.equal(new OnboardingCoach({ storage }).send({ type: "tier-available" }), null, "persisted seen");
 });
 
 test("recall: 'how it works' is always available, even for a connaisseur", () => {

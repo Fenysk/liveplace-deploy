@@ -60,7 +60,7 @@ export type OnboardingEvent =
   | { type: "commit" } // validated the batch
   | { type: "placed" } // a pixel landed on the canvas — the "aha"
   | { type: "gauge-empty"; params?: HintParams } // ran out of pixels (cooldown begins)
-  | { type: "gauge-grew"; params?: HintParams } // reserve max grew (Lot D claim / points threshold)
+  | { type: "tier-available" } // a palier became claimable for the first time (Lot D) — coach the *active* encaisser gesture
   | { type: "idle" } // hesitation timer fired (inactive a few seconds)
   | { type: "blocked-attempt" } // tried an action that can't go through (cap / locked)
   | { type: "dismiss" }; // user dismissed the active hint
@@ -154,8 +154,11 @@ export class OnboardingCoach {
       case "gauge-empty":
         this.maybeShow("gaugeEmpty", event.params);
         break;
-      case "gauge-grew":
-        this.maybeShow("pointsThreshold", event.params);
+      case "tier-available":
+        // The Lot D model is "palier à encaisser" (active claim), NOT passive
+        // growth: coach the gesture the *instant* the first tier is claimable,
+        // before the viewer is left guessing what "Réserve disponible" means.
+        this.maybeShow("pointsThreshold");
         break;
       case "idle":
         // A connaisseur is never bothered by the hesitation prompt.

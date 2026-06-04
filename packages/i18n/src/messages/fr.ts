@@ -104,7 +104,7 @@ export const fr: Catalog = {
   "canvas.onboarding.aim": "Vise une case, choisis ta couleur",
   "canvas.onboarding.firstPixel": "Posé ! Tes pixels sont limités — ils se rechargent avec le temps",
   "canvas.onboarding.gaugeEmpty": "Plus de pixels — recharge dans {seconds}s. Prépare ta prochaine case",
-  "canvas.onboarding.pointsThreshold": "+1 à ta réserve max — ta jauge grandit quand tu joues",
+  "canvas.onboarding.pointsThreshold": "Tu as gagné de la réserve — appuie sur « Agrandir ma réserve » pour l'encaisser",
   "canvas.onboarding.help": "Besoin d'un coup de main ?",
   "canvas.onboarding.howto": "Comment ça marche",
   "canvas.onboarding.dismiss": "OK",

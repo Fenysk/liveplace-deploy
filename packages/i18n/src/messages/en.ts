@@ -111,7 +111,7 @@ export const en = {
   "canvas.onboarding.aim": "Aim at a cell, pick a colour",
   "canvas.onboarding.firstPixel": "Placed! Your pixels are limited — they refill over time",
   "canvas.onboarding.gaugeEmpty": "Out of pixels — refills in {seconds}s. Line up your next cell",
-  "canvas.onboarding.pointsThreshold": "+1 to your max reserve — your gauge grows as you play",
+  "canvas.onboarding.pointsThreshold": "You earned reserve — tap “Grow my reserve” to claim it and enlarge your gauge",
   "canvas.onboarding.help": "Need a hand?",
   "canvas.onboarding.howto": "How it works",
   "canvas.onboarding.dismiss": "Got it",

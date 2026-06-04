@@ -58,7 +58,7 @@ const novice = walk(new OnboardingCoach({ storage: noviceStorage }), [
   { label: "Stage une case", event: { type: "stage" } },
   { label: "1ᵉʳ pixel posé (aha)", event: { type: "placed" } },
   { label: "1ʳᵉ jauge vide", event: { type: "gauge-empty", params: { seconds: 9 } } },
-  { label: "1ᵉʳ seuil de réserve", event: { type: "gauge-grew", params: { max: 6 } } },
+  { label: "1ᵉʳ palier encaissable (0→>0)", event: { type: "tier-available" } },
 ]);
 
 const connoisseur = walk(new OnboardingCoach(), [
