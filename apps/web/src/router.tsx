@@ -37,7 +37,7 @@ const GalleryPage = lazy(() =>
   import("./features/gallery/GalleryPage.js").then((m) => ({ default: m.GalleryPage })),
 );
 const CanvasView = lazy(() =>
-  import("./features/canvas/CanvasView.js").then((m) => ({ default: m.CanvasView })),
+  import("./features/canvas/CanvasViewLive.js").then((m) => ({ default: m.CanvasViewLive })),
 );
 const ObsView = lazy(() =>
   import("./features/canvas/ObsView.js").then((m) => ({ default: m.ObsView })),

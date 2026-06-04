@@ -292,15 +292,24 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
 
   // Subscribe to tier progression. Snapshots fold into the controller; a server
   // confirmation that advances the applied count shrinks the optimistic overlay.
+  //
+  // The subscription is keyed ONLY on the source identity (stable for the mount),
+  // never on `refreshCap` — which changes on every gauge frame. Re-running it per
+  // gauge frame would rebuild `tierRef` and drop the optimistic overlay before the
+  // server `confirmed` caught up, flashing the réserve max down then back up. We
+  // read the latest `refreshCap` through a ref so the overlay survives until the
+  // matching `gauge` frame + fresh snapshot resorb it together (no visible jump).
+  const refreshCapRef = useRef(refreshCap);
+  refreshCapRef.current = refreshCap;
   useEffect(() => {
     tierRef.current = new TierClaim();
     const unsub = tierSource.subscribe((p) => {
       tierRef.current.sync(p);
       bumpTier();
-      refreshCap();
+      refreshCapRef.current();
     });
     return unsub;
-  }, [tierSource, bumpTier, refreshCap]);
+  }, [tierSource, bumpTier]);
 
   // Tick once a second while on cooldown so the countdown re-renders.
   useEffect(() => {
