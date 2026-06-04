@@ -10,7 +10,8 @@ export const fr: Catalog = {
   "app.tagline": "Une toile de pixels collaborative, en direct sur Twitch",
 
   // Navigation
-  "nav.primary": "Principale",
+  "nav.primary": "Navigation principale",
+  "nav.skipToContent": "Aller au contenu",
   "nav.canvas": "Toile",
   "nav.gallery": "Galerie",
   "nav.leaderboard": "Classement",
@@ -91,7 +92,11 @@ export const fr: Catalog = {
   "canvas.onboarding.dismiss": "OK",
 
   // Public profile (F11) — consumed by ProfilePage / profileView
+  // `profile.notFound` = titre ; `.body`/`.cta` = affordance de récupération
+  // équivalente au 404 (FEN-125).
   "profile.notFound": "Profil introuvable",
+  "profile.notFound.body": "Aucun joueur ne correspond à ce nom — il a peut-être changé, ou n'a jamais existé.",
+  "profile.notFound.cta": "Découvrir les toiles",
   "profile.memberSince": "Membre depuis {date}",
   "profile.totals": "Totaux",
   "profile.pixelsPlaced": "Pixels posés",
@@ -106,6 +111,7 @@ export const fr: Catalog = {
   "gallery.title": "Découvrir les toiles",
   "gallery.viewers": "{count} spectateurs",
   "gallery.empty": "Aucune toile publique en direct pour le moment.",
+  "gallery.emptyCta": "Ouvrir la toile en direct",
   "gallery.viewStreamer": "Voir le profil de {name}",
 
   // Espace streamer (F9/F10/F11) — tableau de bord / création / diffuser (FEN-120)

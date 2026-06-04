@@ -66,10 +66,16 @@ html.lp-obs-root body {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
-/* canvas → gallery escape hatch: light, secondary to the hero (FEN-114). */
+/* canvas → gallery escape hatch: light, secondary to the hero (FEN-114).
+   Full ≥44×44px tap target on mobile (FEN-125 / WCAG 2.5.5) — inline-flex with a
+   min-height floor so the whole pill is the hit area, not just the text glyphs,
+   while staying visually secondary to the canvas. */
 .lp-navlink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   background: rgba(0, 0, 0, 0.6);
-  padding: 6px 10px;
+  padding: 0 12px;
   border-radius: 8px;
   color: inherit;
   text-decoration: none;

@@ -38,7 +38,33 @@ export function ProfilePage({ login }: ProfilePageProps) {
     return <p className="profile-loading">{t("common.loading")}</p>;
   }
   if (view.state === "notFound") {
-    return <p className="profile-notfound">{t(view.titleKey)}</p>;
+    // Recovery affordance equivalent to the dedicated 404 (FEN-125): a bare
+    // `<p>` read as half-broken next to NotFoundPage. Same heading+body+CTA
+    // pattern, but recovery targets differ — Gallery ("discover canvases") is the
+    // primary forward action for a missing player, the canvas a secondary fall
+    // back. Both are i18n (FR↔EN) and ≥44px tap targets.
+    return (
+      <section
+        className="profile-notfound"
+        aria-labelledby="profile-notfound-title"
+        style={{ textAlign: "center", padding: "3rem 1rem" }}
+      >
+        <h1 id="profile-notfound-title" style={{ margin: "0 0 0.5rem" }}>
+          {t(view.titleKey)}
+        </h1>
+        <p style={{ color: "#777", maxWidth: 420, margin: "0 auto 1.5rem" }}>
+          {t("profile.notFound.body")}
+        </p>
+        <div style={{ display: "inline-flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "center" }}>
+          <Link to={paths.gallery()} style={notFoundPrimaryCta}>
+            {t("profile.notFound.cta")}
+          </Link>
+          <Link to={paths.canvas()} style={notFoundSecondaryCta}>
+            {t("notFound.backToCanvas")}
+          </Link>
+        </div>
+      </section>
+    );
   }
 
   return (
@@ -105,3 +131,26 @@ export function ProfilePage({ login }: ProfilePageProps) {
     </main>
   );
 }
+
+// Recovery CTAs for the profile-not-found state (FEN-125). Inline like the rest
+// of the shell (no global stylesheet yet); both clear the ≥44px tap-target floor.
+// Fine visuals are delegated to the shell styling pass.
+const notFoundCtaBase: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 44,
+  padding: "0 1.25rem",
+  borderRadius: 8,
+  textDecoration: "none",
+};
+const notFoundPrimaryCta: React.CSSProperties = {
+  ...notFoundCtaBase,
+  background: "#1f1f23",
+  color: "#fff",
+  fontWeight: 600,
+};
+const notFoundSecondaryCta: React.CSSProperties = {
+  ...notFoundCtaBase,
+  border: "1px solid #ccc",
+  color: "inherit",
+};
