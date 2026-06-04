@@ -91,6 +91,14 @@ export const en = {
   "canvas.batchHint": "Select a cell, then Confirm",
   "canvas.zoomHint": "Zoom in to place precisely",
 
+  // Active cooldown — turn the wait into anticipation (UX Lot F, FEN-119).
+  // Forward-oriented countdown: aim/arm the next cell while it refills, then
+  // drop it in one gesture at refill. No "skip cooldown" — you only aim ahead.
+  "canvas.armHere": "Aim for refill",
+  "canvas.cooldown.waiting": "Aim your next pixel while it refills — {seconds}s",
+  "canvas.cooldown.armed": "Next pixel ready — drops in {seconds}s",
+  "canvas.cooldown.ready": "Refilled — confirm to drop your pixel",
+
   // Keyboard pose + screen-reader announcements (FEN-123, WCAG 2.1.1 / 4.1.3)
   "canvas.canvasLabel": "Pixel canvas",
   "canvas.keyboardHelp":

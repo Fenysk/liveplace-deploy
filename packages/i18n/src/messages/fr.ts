@@ -84,6 +84,14 @@ export const fr: Catalog = {
   "canvas.batchHint": "Sélectionne une case, puis Valider",
   "canvas.zoomHint": "Zoome pour poser avec précision",
 
+  // Cooldown actif — transformer l'attente en anticipation (UX Lot F, FEN-119).
+  // Décompte orienté futur : viser/armer sa prochaine case pendant la recharge,
+  // puis la poser en un geste à 0:00. Pas de « skip cooldown » — on vise en avance.
+  "canvas.armHere": "Viser pour la recharge",
+  "canvas.cooldown.waiting": "Vise ta prochaine case pendant la recharge — {seconds}s",
+  "canvas.cooldown.armed": "Prochaine case prête — pose dans {seconds}s",
+  "canvas.cooldown.ready": "Rechargé — valide pour poser ta case",
+
   // Pose au clavier + annonces lecteur d'écran (FEN-123, WCAG 2.1.1 / 4.1.3)
   "canvas.canvasLabel": "Canevas de pixels",
   "canvas.keyboardHelp":

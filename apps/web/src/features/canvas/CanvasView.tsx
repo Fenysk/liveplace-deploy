@@ -36,6 +36,7 @@ import { OnboardingCoach, createLocalOnboardingStorage, type OnboardingHint } fr
 import { gateInteraction, type CanvasInteraction } from "./authGate.js";
 import { TierClaim, inertTierSource, type TierSource } from "./tierClaim.js";
 import { derivePlaceState, type CanPlaceReason, type ConnectionState } from "./placeState.js";
+import { deriveCooldownView, armingCapacity } from "./cooldown.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
@@ -102,6 +103,16 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   // tap callback can prevent staging BEFORE the click when placement is blocked
   // (Lot E: "prévenir avant le clic", never an after-the-fact surprise).
   const canPlaceNowRef = useRef(false);
+  // Lot F (FEN-119): arming may be allowed even when posing is not (i.e. during
+  // cooldown). Mirrored into a ref so the bound-once renderer tap callback can
+  // let the user pre-aim their next cell while the gauge refills, instead of
+  // refusing the tap the way a hard block (offline / frozen / banned) does.
+  const canArmNowRef = useRef(false);
+  // Live cooldown facts the bound-once tap callback needs (Lot F): are we cooling
+  // right now, and how many seconds to the refill — so a "one cell already armed"
+  // refusal reads as anticipation ("drops in Ns"), not the generic "gauge full".
+  const onCooldownRef = useRef(false);
+  const cooldownSecondsRef = useRef(0);
   const blockedMsgRef = useRef<MessageKey>("canvas.state.loading");
 
   // current tool, mirrored into refs so the renderer's tap callback (bound once)
@@ -235,11 +246,14 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       // the auth dimension: invite, don't block). For an anonymous viewer this
       // redirects to Twitch before any cell is staged.
       if (!requireAccount("stage-cell")) return;
-      // Then prevent before the click for the *other* blocked reasons (offline,
-      // cooldown, event window, ban): show the reason instead of staging a doomed
-      // cell (Lot E — no "click to discover you can't"). Recoloring/deselecting an
-      // already-staged cell never grows the batch, so let those through.
-      if (!canPlaceNowRef.current && !selectionRef.current.has(x, y)) {
+      // Then prevent before the click for the *hard* blocked reasons (offline,
+      // event window, ban): show the reason instead of staging a doomed cell
+      // (Lot E — no "click to discover you can't"). Cooldown is NOT a hard block
+      // here (Lot F): arming the next cell while the gauge refills is allowed, so
+      // `canArmNowRef` (true during cooldown) gates instead of `canPlaceNowRef`.
+      // Recoloring/deselecting an already-staged cell never grows the batch, so
+      // let those through regardless.
+      if (!canArmNowRef.current && !selectionRef.current.has(x, y)) {
         showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
         return;
       }
@@ -247,7 +261,13 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       const r = selectionRef.current.apply(x, y, c);
       bumpActivity();
       if (r.kind === "cap") {
-        showToast({ kind: "cap", messageKey: "canvas.feedback.capReached", params: { max: r.cap } });
+        // While cooling, the cap is the single armed "next" cell — frame the
+        // refusal as anticipation, not a full gauge (you can re-aim, not stack).
+        showToast(
+          onCooldownRef.current
+            ? { kind: "cooldown", messageKey: "canvas.cooldown.armed", params: { seconds: cooldownSecondsRef.current } }
+            : { kind: "cap", messageKey: "canvas.feedback.capReached", params: { max: r.cap } },
+        );
         emit({ type: "blocked-attempt" }); // hit a wall ⇒ offer help (ux-spec §D9)
       } else if (r.kind === "locked") {
         showToast({ kind: "banned", messageKey: "canvas.feedback.banned" });
@@ -320,6 +340,15 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
         syncOverlay();
         return;
       }
+      // Lot F: while cooling we can ARM but not yet fire. Keep the staged cell,
+      // announce the upcoming drop, and leave it for a single confirm gesture at
+      // refill (the Valider button enables the instant the gauge recharges).
+      if (!canPlaceNowRef.current) {
+        showToast({ kind: "cooldown", messageKey: "canvas.cooldown.armed", params: { seconds: cooldownSecondsRef.current } });
+        setArmed(null);
+        syncOverlay();
+        return;
+      }
       validate(); // commits the just-staged single cell and clears `armed`
     },
     [requireAccount, showToast, syncOverlay, validate],
@@ -337,7 +366,10 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   // claimed-but-unconfirmed overlay). Called after a claim so the ceiling
   // recomputes immediately (+1 usable charge → one more selectable cell).
   const refreshCap = useCallback(() => {
-    selectionRef.current.setCapacity(tierRef.current.effectiveCharges(gauge?.charges ?? 0));
+    const eff = tierRef.current.effectiveCharges(gauge?.charges ?? 0);
+    // Lot F: while the gauge is empty the ceiling is one armed "next" cell, not
+    // zero — so the batch isn't frozen during cooldown (it was, in Lot A/E).
+    selectionRef.current.setCapacity(armingCapacity(eff, eff <= 0 && gauge !== null));
     setSelVersion((n) => n + 1);
   }, [gauge]);
 
@@ -432,7 +464,8 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   // The gauge ceiling drives the batch cap (k/N), including any claimed-but-
   // unconfirmed tier overlay so the ceiling reflects a just-encashed charge.
   useEffect(() => {
-    selectionRef.current.setCapacity(tierRef.current.effectiveCharges(gauge?.charges ?? 0));
+    const eff = tierRef.current.effectiveCharges(gauge?.charges ?? 0);
+    selectionRef.current.setCapacity(armingCapacity(eff, eff <= 0 && gauge !== null));
     setSelVersion((n) => n + 1);
   }, [gauge]);
 
@@ -451,10 +484,12 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
             stageCell(x, y);
             return;
           }
-          // Mobile first touch: if placement is blocked, surface the reason rather
-          // than revealing "Dessiner" (prévenir avant le clic, Lot E) — and don't
-          // count it as an "aim" funnel event.
-          if (!canPlaceNowRef.current) {
+          // Mobile first touch: if placement is *hard*-blocked, surface the reason
+          // rather than revealing the affordance (prévenir avant le clic, Lot E).
+          // Cooldown is not a hard block (Lot F): arming the next cell while the
+          // gauge refills is allowed, so gate on `canArmNowRef` (true while
+          // cooling) — and don't count a refused tap as an "aim" funnel event.
+          if (!canArmNowRef.current) {
             showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
             return;
           }
@@ -583,6 +618,25 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   canPlaceNowRef.current = placeState.canPlace;
   blockedMsgRef.current = placeState.messageKey;
 
+  // Cooldown engagement view (Lot F, FEN-119): from the SAME effective gauge the
+  // unified indicator reads, plus the armed-batch size, recomputed each render
+  // (the per-second tick keeps the countdown live). It governs the
+  // forward-oriented countdown line and the arming affordance. Arming is allowed
+  // whenever posing is (ready) OR while cooling — the one edge Lot E forbids
+  // commit but Lot F still lets you aim ahead.
+  const cooldownView = effectiveGauge
+    ? deriveCooldownView({
+        charges: effectiveGauge.charges,
+        cooldownUntil: effectiveGauge.cooldownUntil,
+        now: Date.now(),
+        staged: selectionRef.current.count,
+      })
+    : null;
+  const canArmNow = placeState.canPlace || placeState.kind === "cooldown";
+  canArmNowRef.current = canArmNow;
+  onCooldownRef.current = placeState.kind === "cooldown";
+  cooldownSecondsRef.current = cooldownView?.secondsUntilNext ?? 0;
+
   // Onboarding: arrival nudge + start the hesitation clock, once per mount.
   useEffect(() => {
     emit({ type: "arrive" });
@@ -705,6 +759,17 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
           {t(placeState.messageKey as MessageKey, placeState.params)}
         </p>
 
+        {/* Lot F (FEN-119) — active cooldown: a forward-oriented line that turns
+            the wait into anticipation. It invites aiming the next cell, confirms
+            it is armed, then prompts the single confirm gesture at refill. Sober
+            (no "skip cooldown"); a status, not an alert. `data-phase` exposes the
+            engagement phase for the UI phase to style (visual delegated). */}
+        {cooldownView?.messageKey && (
+          <p className="lp-cooldown" data-phase={cooldownView.phase} role="status">
+            {t(cooldownView.messageKey as MessageKey, cooldownView.params)}
+          </p>
+        )}
+
         {/* Rang 2 — the staging counter, shown only while a batch is in progress. */}
         {count > 0 && (
           <p className="lp-gauge">{t("canvas.batchCount", { count, max: sel.capacity })}</p>
@@ -759,16 +824,19 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
           </button>
 
           {/* Mobile gate on the armed cell: express single pose ("Poser ici", 2
-              gestures — U1) OR enter batch draw mode to build a multi-cell set. */}
+              gestures — U1) OR enter batch draw mode to build a multi-cell set.
+              Lot F (FEN-119): while cooling, the primary action ARMS the cell for
+              the refill (it can't fire yet) and reads "Viser pour la recharge" —
+              `canArmNow` keeps it enabled where `canPlace` alone would grey it. */}
           {armed && !drawing && (
             <>
               <button
                 type="button"
                 className="lp-btn is-primary"
-                disabled={sel.isLocked || !placeState.canPlace}
+                disabled={sel.isLocked || !canArmNow}
                 onClick={() => placeHere(armed.x, armed.y)}
               >
-                {t("canvas.placeHere")}
+                {placeState.canPlace ? t("canvas.placeHere") : t("canvas.armHere")}
               </button>
               <button
                 type="button"
