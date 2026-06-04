@@ -164,6 +164,33 @@ else
   echo "[convex-deploy] BETTER_AUTH_SECRET UNSET in container env — cannot seed (see DIAG_SEED_REPORT; fix the Coolify env, FEN-98)"
 fi
 
+# 2c) FEN-100 — the OAuth base URL hit the SAME bulk-drop as BETTER_AUTH_SECRET.
+#     diag.authEnvStatus proved the functions runtime served a stale sslip
+#     BETTER_AUTH_URL while Coolify + this container's env already held
+#     https://liveplace.tv, i.e. the bulk `convex env set --from-file` (2) silently
+#     dropped BETTER_AUTH_URL's updated value (same multi-line skip that dropped the
+#     secret). auth.ts:27 derives the OAuth `redirect_uri` from
+#     `SITE_URL ?? BETTER_AUTH_URL`, so a stale base = Twitch rejects login e2e.
+#     Re-seed BOTH individually, ONE var per `--from-file` (the proven non-drop
+#     path used for BETTER_AUTH_SECRET above), so redirect_uri tracks the real
+#     public origin. SITE_URL is not in the coolify-deploy stack, so default it to
+#     the (now correct) BETTER_AUTH_URL to make auth.ts's precedence deterministic.
+AUTH_BASE="${SITE_URL:-${BETTER_AUTH_URL:-}}"
+if [ -n "$AUTH_BASE" ]; then
+  for AKEY in BETTER_AUTH_URL SITE_URL; do
+    AURL_TMP=".env.${AKEY}.$$"
+    printf '%s=%s\n' "$AKEY" "$AUTH_BASE" > "$AURL_TMP"
+    if pnpm exec convex env set --from-file "$AURL_TMP"; then
+      echo "[convex-deploy] re-seeded $AKEY individually = $AUTH_BASE (belt-and-suspenders, FEN-100)"
+    else
+      echo "[convex-deploy] WARNING: individual $AKEY re-seed failed"
+    fi
+    rm -f "$AURL_TMP"
+  done
+else
+  echo "[convex-deploy] BETTER_AUTH_URL/SITE_URL UNSET in container env — cannot seed auth base (fix Coolify PUBLIC_BASE_URL, FEN-100)"
+fi
+
 # 3) Seed the durable canvas row for the deployed slug (FEN-94). The worker seam
 #    (applyFlush / setGalleryFields / recordSnapshot) is a no-op until a
 #    `canvases` row exists (ADR-0001), and in anonymous mode (GATEWAY_AUTH_DISABLED=1)
