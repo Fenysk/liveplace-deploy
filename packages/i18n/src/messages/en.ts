@@ -76,6 +76,13 @@ export const en = {
   "canvas.cursorAt": "Cell {x}, {y}",
   "canvas.cursorAtStaged": "Cell {x}, {y}, selected",
 
+  // Claim de palier — reserve progression (Lot D / FEN-116). Gauge only; no points/shop.
+  "canvas.claim.available": "Reserve +1 unlocked!",
+  "canvas.claim.stacked": "{count} reserve upgrades to claim",
+  "canvas.claim.action": "Grow my reserve",
+  "canvas.claim.all": "Claim all ({count})",
+  "canvas.claim.celebrate": "Reserve grown — {max} pixels!",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profile not found",
   "profile.memberSince": "Member since {date}",

@@ -31,6 +31,7 @@ import { CanvasNetClient, type ConnectionStatus } from "./net.js";
 import { OptimisticPlacement, type PlacementFeedback } from "./placement.js";
 import { BatchSelection, EMPTY_COLOR } from "./selection.js";
 import { gateInteraction, type CanvasInteraction } from "./authGate.js";
+import { TierClaim, inertTierSource, type TierSource } from "./tierClaim.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
@@ -46,9 +47,15 @@ interface ToastState {
 export interface CanvasViewProps {
   /** Canvas slug; null targets the default canvas (`/ws`). */
   slug?: string | null;
+  /**
+   * Tier-progression source for the "claim de palier" mechanic (Lot D). Defaults
+   * to {@link inertTierSource} so the claim UI stays hidden until the backend
+   * reframe (`getMyTierProgress`/`claimTier`) is wired — see tierClaim.ts.
+   */
+  tierSource?: TierSource;
 }
 
-export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement {
+export function CanvasView({ slug = null, tierSource = inertTierSource }: CanvasViewProps): React.ReactElement {
   const t = useTranslate();
   // The renderer's keyboard hooks are bound once; read the latest translator
   // through a ref so a mid-session locale switch keeps announcements localized
@@ -95,6 +102,16 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const [announce, setAnnounce] = useState(""); // polite SR readout of the keyboard cursor (U3)
   const [selVersion, setSelVersion] = useState(0); // bumped on every batch change
   const [, setTick] = useState(0); // drives the per-second cooldown countdown
+
+  // Lot D — "claim de palier": one controller per mount; `pending` drives the
+  // (non-blocking, persistent, stackable) claim signal; `tierVersion` forces a
+  // HUD refresh whenever progression or the optimistic overlay changes.
+  const tierRef = useRef<TierClaim>(new TierClaim());
+  const tierSourceRef = useRef<TierSource>(tierSource);
+  tierSourceRef.current = tierSource;
+  const [tierVersion, setTierVersion] = useState(0);
+  const [celebrate, setCelebrate] = useState(false);
+  const bumpTier = useCallback(() => setTierVersion((n) => n + 1), []);
 
   /** Push the staged batch + hovered cell to the renderer and re-render the HUD. */
   const syncOverlay = useCallback(() => {
@@ -197,12 +214,60 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     syncOverlay();
   }, [syncOverlay]);
 
+  // Re-seat the batch cap from the optimistic effective charges (gauge charges +
+  // claimed-but-unconfirmed overlay). Called after a claim so the ceiling
+  // recomputes immediately (+1 usable charge → one more selectable cell).
+  const refreshCap = useCallback(() => {
+    selectionRef.current.setCapacity(tierRef.current.effectiveCharges(gauge?.charges ?? 0));
+    setSelVersion((n) => n + 1);
+  }, [gauge]);
+
+  // Encash one pending tier: optimistic +1 (max + usable charge), celebrate, and
+  // route the idempotent op to the server source.
+  const claimNext = useCallback(() => {
+    const op = tierRef.current.claimNext();
+    if (!op) return;
+    void tierSourceRef.current.claim(op);
+    setCelebrate(true);
+    bumpTier();
+    refreshCap();
+  }, [bumpTier, refreshCap]);
+
+  // "Tout encaisser": claim every stacked tier in one gesture.
+  const claimAll = useCallback(() => {
+    const ops = tierRef.current.claimAll();
+    if (ops.length === 0) return;
+    for (const op of ops) void tierSourceRef.current.claim(op);
+    setCelebrate(true);
+    bumpTier();
+    refreshCap();
+  }, [bumpTier, refreshCap]);
+
   // Auto-dismiss the toast.
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(null), TOAST_MS);
     return () => clearTimeout(id);
   }, [toast]);
+
+  // Auto-dismiss the claim celebration.
+  useEffect(() => {
+    if (!celebrate) return;
+    const id = setTimeout(() => setCelebrate(false), TOAST_MS);
+    return () => clearTimeout(id);
+  }, [celebrate]);
+
+  // Subscribe to tier progression. Snapshots fold into the controller; a server
+  // confirmation that advances the applied count shrinks the optimistic overlay.
+  useEffect(() => {
+    tierRef.current = new TierClaim();
+    const unsub = tierSource.subscribe((p) => {
+      tierRef.current.sync(p);
+      bumpTier();
+      refreshCap();
+    });
+    return unsub;
+  }, [tierSource, bumpTier, refreshCap]);
 
   // Tick once a second while on cooldown so the countdown re-renders.
   useEffect(() => {
@@ -212,9 +277,10 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     return () => clearInterval(id);
   }, [gauge]);
 
-  // The gauge ceiling drives the batch cap (k/N).
+  // The gauge ceiling drives the batch cap (k/N), including any claimed-but-
+  // unconfirmed tier overlay so the ceiling reflects a just-encashed charge.
   useEffect(() => {
-    selectionRef.current.setCapacity(gauge?.charges ?? 0);
+    selectionRef.current.setCapacity(tierRef.current.effectiveCharges(gauge?.charges ?? 0));
     setSelVersion((n) => n + 1);
   }, [gauge]);
 
@@ -285,6 +351,9 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
         onReconnected: () => {
           const q = placementRef.current?.resendQueue() ?? [];
           for (const m of q) netRef.current?.place(m);
+          // Replay any optimistically-encashed-but-unconfirmed tiers. The server
+          // applies each `tierIndex` at most once, so this is safe to repeat.
+          for (const op of tierRef.current.resendUnconfirmed()) void tierSourceRef.current.claim(op);
         },
         onStatus: setStatus,
       },
@@ -307,6 +376,16 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const sel = selectionRef.current;
   const count = sel.count; // re-read each render; selVersion forces the refresh
   void selVersion;
+
+  // Lot D derived values (tierVersion forces the refresh). The réserve max grows
+  // by the optimistic overlay the instant a tier is encashed.
+  void tierVersion;
+  const tier = tierRef.current;
+  const pendingTiers = tier.pending;
+  const effectiveMax = gauge !== null ? tier.effectiveMax(gauge.max) : 0;
+  // Current charges incl. the optimistic +1-per-claim grant, so a just-encashed
+  // réserve visibly grows (5/5 → 6/6) before the confirming gauge frame lands.
+  const effectiveCharges = gauge !== null ? tier.effectiveCharges(gauge.charges) : 0;
 
   return (
     <div className="lp-app">
@@ -352,8 +431,28 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
               ? t("canvas.cooldown", { seconds: cooldownSeconds })
               : count > 0
                 ? t("canvas.batchCount", { count, max: sel.capacity })
-                : t("canvas.gauge", { current: gauge.charges, max: gauge.max })}
+                : t("canvas.gauge", { current: effectiveCharges, max: effectiveMax })}
         </p>
+
+        {/* Lot D — claim signal: non-blocking, persistent, stackable. The viewer
+            encashes a tier earned by playing; nothing else (no points/shop). */}
+        {pendingTiers > 0 && (
+          <div className="lp-claim" role="status">
+            <span className="lp-claim-label">
+              {pendingTiers > 1
+                ? t("canvas.claim.stacked", { count: pendingTiers })
+                : t("canvas.claim.available")}
+            </span>
+            <button type="button" className="lp-btn is-primary lp-claim-btn" onClick={claimNext}>
+              {t("canvas.claim.action")}
+            </button>
+            {pendingTiers > 1 && (
+              <button type="button" className="lp-btn lp-claim-all" onClick={claimAll}>
+                {t("canvas.claim.all", { count: pendingTiers })}
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="lp-palette" role="group" aria-label={t("canvas.palette")}>
           {PALETTE_HEX.map((hex, i) => (
@@ -442,6 +541,13 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
           role="status"
         >
           {t(toast.messageKey as MessageKey, toast.params)}
+        </div>
+      )}
+
+      {/* Claim celebration — the dopamine moment when a tier is encashed. */}
+      {celebrate && (
+        <div className="lp-celebrate" role="status">
+          {t("canvas.claim.celebrate", { max: effectiveMax })}
         </div>
       )}
     </div>

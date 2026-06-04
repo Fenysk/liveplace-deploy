@@ -72,6 +72,13 @@ export const fr: Catalog = {
   "canvas.cursorAt": "Case {x}, {y}",
   "canvas.cursorAtStaged": "Case {x}, {y}, sélectionnée",
 
+  // Claim de palier — progression de la réserve (Lot D / FEN-116). Jauge seule ; aucun point/boutique.
+  "canvas.claim.available": "Réserve +1 !",
+  "canvas.claim.stacked": "{count} paliers à encaisser",
+  "canvas.claim.action": "Agrandir ma réserve",
+  "canvas.claim.all": "Tout encaisser ({count})",
+  "canvas.claim.celebrate": "Réserve agrandie — {max} pixels !",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profil introuvable",
   "profile.memberSince": "Membre depuis {date}",

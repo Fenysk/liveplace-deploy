@@ -211,3 +211,37 @@ html.lp-obs-root body {
   border-color: #2a5a3a;
   color: #c6f6d5;
 }
+
+/* Claim de palier (Lot D) — non-blocking signal in the HUD. Fine visual styling
+   is delegated; this is the strict-minimum-usable surface. */
+.lp-claim {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(20, 32, 12, 0.7);
+  border: 1px solid #3f6a2a;
+}
+.lp-claim-label {
+  font-weight: 700;
+  color: #bff09a;
+}
+
+/* The encash celebration — the dopamine moment. */
+.lp-celebrate {
+  position: fixed;
+  left: 50%;
+  top: 22%;
+  transform: translateX(-50%);
+  background: rgba(16, 36, 10, 0.92);
+  border: 1px solid #5fae3a;
+  color: #d7ffb8;
+  padding: 14px 22px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 18px;
+  z-index: 30;
+}
