@@ -45,6 +45,15 @@ const ObsView = lazy(() =>
 const NotFoundPage = lazy(() =>
   import("./features/NotFoundPage.js").then((m) => ({ default: m.NotFoundPage })),
 );
+const DashboardPage = lazy(() =>
+  import("./features/streamer/DashboardPage.js").then((m) => ({ default: m.DashboardPage })),
+);
+const CreateCanvasPage = lazy(() =>
+  import("./features/streamer/CreateCanvasPage.js").then((m) => ({ default: m.CreateCanvasPage })),
+);
+const BroadcastPage = lazy(() =>
+  import("./features/streamer/BroadcastPage.js").then((m) => ({ default: m.BroadcastPage })),
+);
 
 /** Subscribe to browser history changes (back/forward + `navigate()`). */
 function subscribe(onChange: () => void): () => void {
@@ -146,6 +155,30 @@ export function Router(): ReactElement {
         <AppShell>
           <Lazy>
             <ProfilePage login={route.login} />
+          </Lazy>
+        </AppShell>
+      );
+    case "studioDashboard":
+      return (
+        <AppShell>
+          <Lazy>
+            <DashboardPage />
+          </Lazy>
+        </AppShell>
+      );
+    case "studioCreate":
+      return (
+        <AppShell>
+          <Lazy>
+            <CreateCanvasPage />
+          </Lazy>
+        </AppShell>
+      );
+    case "studioBroadcast":
+      return (
+        <AppShell>
+          <Lazy>
+            <BroadcastPage slug={route.slug} />
           </Lazy>
         </AppShell>
       );

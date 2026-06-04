@@ -43,6 +43,7 @@ export function AppShell({ children }: { children: ReactNode }): React.ReactElem
           </Link>
           <Link to={paths.canvas()}>{t("nav.canvas")}</Link>
           <Link to={paths.gallery()}>{t("nav.gallery")}</Link>
+          <Link to={paths.studio()}>{t("nav.studio")}</Link>
         </nav>
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
           <AuthButton />

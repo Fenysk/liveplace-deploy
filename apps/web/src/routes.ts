@@ -31,6 +31,12 @@ export const paths = {
   gallery: (): string => "/gallery",
   /** A public player profile (`/u/:login`). */
   profile: (login: string): string => `/u/${encodeURIComponent(login)}`,
+  /** Streamer studio dashboard — "Mes canvas" (FEN-120 / WF-5). */
+  studio: (): string => "/studio",
+  /** Minimal create-canvas path (FEN-120 / WF-6). */
+  studioCreate: (): string => "/studio/new",
+  /** Per-canvas "Diffuser" (OBS) screen (FEN-120 / WF-7). */
+  studioBroadcast: (slug: string): string => `/studio/broadcast/${encodeURIComponent(slug)}`,
 } as const;
 
 /**
@@ -41,6 +47,9 @@ export type RouteMatch =
   | { kind: "canvas"; slug: string | null }
   | { kind: "profile"; login: string }
   | { kind: "gallery" }
+  | { kind: "studioDashboard" }
+  | { kind: "studioCreate" }
+  | { kind: "studioBroadcast"; slug: string }
   | { kind: "notFound" };
 
 /**
@@ -93,6 +102,14 @@ export function resolveRoute(pathname: string): RouteMatch {
   if (profile) return { kind: "profile", login: decodeURIComponent(profile.login!) };
 
   if (pathname === "/gallery") return { kind: "gallery" };
+
+  // Streamer studio (FEN-120). Order matters: the exact paths first, then the
+  // `/studio/broadcast/:slug` pattern (3 segments) — `/studio/new` (2 segments)
+  // can't collide with it, and `/studio/<anything-else>` falls through to 404.
+  if (pathname === "/studio") return { kind: "studioDashboard" };
+  if (pathname === "/studio/new") return { kind: "studioCreate" };
+  const broadcast = matchRoute("/studio/broadcast/:slug", pathname);
+  if (broadcast) return { kind: "studioBroadcast", slug: decodeURIComponent(broadcast.slug!) };
 
   // Anything else is a real 404 — no silent home-shell fallback.
   return { kind: "notFound" };
