@@ -1,0 +1,204 @@
+/* =============================================================================
+   LivePlace — Design System Tokens (v0.1)
+   Light theme only (cadrage §4). Everything is a named CSS variable so a future
+   dark theme stays possible without redesign, and so Dev Frontend consumes
+   tokens, never inline values (design-system discipline).
+
+   Layers:
+   1. PRIMITIVES      raw scales (never referenced by components directly)
+   2. NEUTRAL UI      chromatically-neutral chrome around the canvas (§5.1)
+   3. SEMANTIC        role tokens components actually use
+   4. DIRECTION       brand/accent/personality, swapped per art direction
+   ========================================================================== */
+
+:root {
+  /* ---- 1. PRIMITIVE SCALES ------------------------------------------------ */
+
+  /* Neutral ramp — true neutral grays (no hue) so they never tint perception of
+     arbitrary canvas pixels. Light theme tuned to be comfortable in the dark:
+     base chrome sits around L92, not blinding paper-white. */
+  --gray-0:  #ffffff;
+  --gray-25: #f7f7f8;
+  --gray-50: #f0f0f2;
+  --gray-100:#e7e7ea;
+  --gray-150:#dcdce0;
+  --gray-200:#cfcfd4;
+  --gray-300:#b7b7be;
+  --gray-400:#90909a;
+  --gray-500:#6c6c76;
+  --gray-600:#52525b;
+  --gray-700:#3d3d45;
+  --gray-800:#292930;
+  --gray-900:#18181c;
+
+  /* Functional status hues (kept constant across directions for learnability).
+     Each is AA on light surfaces and is always paired with an icon/label (§6). */
+  --green-500:#1f9d57;  --green-100:#dcf3e4;
+  --amber-500:#b06f00;  --amber-100:#fbeccb;
+  --red-500:  #c2371d;  --red-100:  #fbe3dd;
+  --blue-500: #2563c9;  --blue-100: #dde9fb;
+
+  /* Spacing — 4px base rhythm. Never use stray gaps; pick from the scale. */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10:40px;
+  --space-12:48px;
+  --space-16:64px;
+
+  /* Type scale — 2 weights cover most of the UI; 3 active sizes per context. */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-sans);   /* overridden per direction */
+  --font-mono: ui-monospace, "SF Mono", "Roboto Mono", monospace;
+
+  --text-xs:   12px;   --lh-xs:   16px;   /* a11y floor: never below 12px (§6) */
+  --text-sm:   14px;   --lh-sm:   20px;
+  --text-base: 16px;   --lh-base: 24px;
+  --text-lg:   18px;   --lh-lg:   26px;
+  --text-xl:   22px;   --lh-xl:   28px;
+  --text-2xl:  28px;   --lh-2xl:  34px;
+  --text-3xl:  36px;   --lh-3xl:  42px;
+
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700;
+
+  /* Radii — direction tunes these; defaults are the Sobre baseline. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* Elevation — soft, low-luminance shadows (no harsh blacks on light theme). */
+  --elev-1: 0 1px 2px rgba(24,24,28,.06), 0 1px 1px rgba(24,24,28,.04);
+  --elev-2: 0 2px 6px rgba(24,24,28,.08), 0 1px 2px rgba(24,24,28,.06);
+  --elev-3: 0 8px 24px rgba(24,24,28,.12), 0 2px 6px rgba(24,24,28,.08);
+  /* OBS scene outline: functional shadow that reads on ANY stream (§5.3),
+     survives video compression — no detail thinner than 2px. */
+  --elev-obs: 0 0 0 2px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.45);
+
+  /* Motion — durations + curves as tokens (§7). ~100–300ms feedback band. */
+  --dur-instant: 90ms;
+  --dur-fast:    150ms;
+  --dur-base:    220ms;
+  --dur-slow:    320ms;
+  --ease-out:    cubic-bezier(.22,.78,.27,1);
+  --ease-in-out: cubic-bezier(.5,0,.2,1);
+  --ease-spring: cubic-bezier(.2,1.3,.4,1);
+
+  /* Focus ring — visible, consistent, AA against chrome (§6). */
+  --focus-ring: 0 0 0 2px var(--ui-bg), 0 0 0 4px var(--accent-ring);
+
+  /* ---- 2. NEUTRAL UI (chromatic neutrality, §5.1) ------------------------- */
+  --ui-bg:            var(--gray-100);  /* app background, comfortable-in-dark  */
+  --ui-surface:       var(--gray-25);   /* panels, HUD                          */
+  --ui-surface-raised:var(--gray-0);    /* modals, popovers (used sparingly)    */
+  --ui-border:        var(--gray-150);
+  --ui-border-strong: var(--gray-300);
+  --ui-text:          var(--gray-900);
+  --ui-text-secondary:var(--gray-600);
+  --ui-text-tertiary: var(--gray-500);
+  --ui-text-onAccent: var(--gray-0);
+
+  /* Canvas backing + grid — the §14 answer: a neutral mid-light field plus a
+     hairline per-cell grid so EVERY pixel (incl. pure white / very light) is
+     bounded and legible. No tint, no opacity over pixels (color fidelity). */
+  --canvas-field:  #cfcfd4;            /* neutral, ~L82                         */
+  --canvas-checker:#c6c6cc;            /* 2nd checker tone for transparency     */
+  --canvas-grid:   rgba(24,24,28,.10); /* hairline cell separators             */
+  --canvas-frame:  var(--gray-300);
+
+  /* Selection chrome — never color-only. Selected swatch carries a ring + check
+     + label so it is legible in greyscale (§6 color-independence). */
+  --select-ring:   var(--ui-text);
+  --select-check:  var(--ui-text);
+
+  /* ---- 3. SEMANTIC STATUS ------------------------------------------------- */
+  --status-open-fg:   var(--green-500); --status-open-bg:   var(--green-100);
+  --status-cooldown-fg:var(--amber-500);--status-cooldown-bg:var(--amber-100);
+  --status-frozen-fg: var(--blue-500);  --status-frozen-bg: var(--blue-100);
+  --status-ended-fg:  var(--gray-600);  --status-ended-bg:  var(--gray-100);
+  --status-error-fg:  var(--red-500);   --status-error-bg:  var(--red-100);
+
+  /* ---- 4. DIRECTION DEFAULTS (= Sobre / "Studio") ------------------------- */
+  --accent:        #4b4ea6;            /* restrained indigo, identifiable      */
+  --accent-hover:  #3f4190;
+  --accent-active: #353877;
+  --accent-soft:   #e6e6f4;
+  --accent-ring:   #8385d6;
+  --accent-onAccent: var(--gray-0);
+  --da-radius-control: var(--radius-md);
+  --da-radius-card:    var(--radius-lg);
+  --da-elev-control:   var(--elev-1);
+  --da-motion-scale:   1;              /* motion intensity multiplier          */
+}
+
+/* ===== DIRECTION A — "Studio" (Sobre) ====================================== */
+/* Intention: canvas roi pushed to the limit. Near-monochrome warm-neutral
+   chrome, one disciplined ink-indigo accent, structural calm. Inter only. */
+[data-direction="sobre"] {
+  --font-display: "Inter", system-ui, sans-serif;
+  --accent:        #4b4ea6;
+  --accent-hover:  #3f4190;
+  --accent-active: #353877;
+  --accent-soft:   #e6e6f4;
+  --accent-ring:   #8385d6;
+  --da-radius-control: var(--radius-md);
+  --da-radius-card:    var(--radius-lg);
+  --da-elev-control:   var(--elev-1);
+  --da-motion-scale:   0.85;
+}
+
+/* ===== DIRECTION B — "Arcade" (Fun) ======================================== */
+/* Intention: the pixel-art wink, dosed. Crisp accents, an energetic coral with
+   amber support, square pixel-corners on signature accents only. Display face
+   = Press Start 2P for the wordmark ONLY (never body — perf + legibility). */
+[data-direction="fun"] {
+  --font-display: "Press Start 2P", "Inter", system-ui, sans-serif;
+  --accent:        #ef4d3a;            /* coral — rare in default game palettes */
+  --accent-hover:  #d83e2d;
+  --accent-active: #bd3221;
+  --accent-soft:   #fde3df;
+  --accent-ring:   #f5897a;
+  --accent-2:      #f4a020;            /* amber support / points / celebration  */
+  --da-radius-control: var(--radius-xs);   /* squarer = pixel feel              */
+  --da-radius-card:    var(--radius-sm);
+  --da-elev-control:   var(--elev-2);
+  --da-motion-scale:   1.15;           /* a touch more playful feedback         */
+}
+
+/* ===== DIRECTION C — "Aurora" (Ultra-intuitif) ============================= */
+/* Intention: maximum glanceability + affordance. Big rounded targets, friendly
+   mint/teal accent, soft elevation, generous spacing. Hick/Fitts optimised for
+   the néophyte (Léa). Rounded grotesk (Nunito) for warmth. */
+[data-direction="intuitif"] {
+  --font-display: "Nunito", system-ui, sans-serif;
+  --font-sans:    "Nunito", system-ui, -apple-system, sans-serif;
+  --accent:        #0e9e87;            /* teal/mint — friendly, distinct        */
+  --accent-hover:  #0c8a76;
+  --accent-active: #0a7464;
+  --accent-soft:   #d5f1ec;
+  --accent-ring:   #5cc7b6;
+  --da-radius-control: var(--radius-xl);   /* big, soft, obviously tappable     */
+  --da-radius-card:    var(--radius-xl);
+  --da-elev-control:   var(--elev-2);
+  --da-motion-scale:   1;
+}
+
+/* Reduced motion — kill non-essential animation, keep state legible (§6/§7). */
+@media (prefers-reduced-motion: reduce) {
+  :root { --da-motion-scale: 0; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

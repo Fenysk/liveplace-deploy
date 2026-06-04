@@ -1,0 +1,75 @@
+@import "tailwindcss";
+@import "./fonts.css";
+@import "./tokens.css";
+
+/* Bind design tokens into the Tailwind v4 theme with @theme inline so utilities
+   emit var(--…) (not a frozen value) — that's what lets [data-direction] swap
+   the whole look at runtime. Components stay token-driven, never inline. */
+@theme inline {
+  --color-ui-bg: var(--ui-bg);
+  --color-ui-surface: var(--ui-surface);
+  --color-ui-raised: var(--ui-surface-raised);
+  --color-ui-border: var(--ui-border);
+  --color-ui-border-strong: var(--ui-border-strong);
+  --color-ui-text: var(--ui-text);
+  --color-ui-text-secondary: var(--ui-text-secondary);
+  --color-ui-text-tertiary: var(--ui-text-tertiary);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--accent-onAccent);
+
+  --radius-control: var(--da-radius-control);
+  --radius-card: var(--da-radius-card);
+
+  --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Visible, consistent focus for every interactive element (§6). */
+:where(button, a, input, select, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Tabular numerals everywhere a countdown / count lives — no width jitter. */
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ---- Motion keyframes (durations/curves come from tokens) ----------------- */
+@keyframes lp-place-pop {
+  0%   { transform: scale(.4); opacity: .2; }
+  55%  { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes lp-ring-ping {
+  0%   { transform: scale(.6); opacity: .55; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+@keyframes lp-confetti-fall {
+  0%   { transform: translateY(-8px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(120px) rotate(220deg); opacity: 0; }
+}
+@keyframes lp-pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .55; }
+}
+
+/* The signature place-feedback (the Kano delighter). Honors reduced-motion via
+   --da-motion-scale = 0 collapsing the animation to nothing. */
+.lp-pop      { animation: lp-place-pop calc(var(--dur-base) * var(--da-motion-scale, 1)) var(--ease-spring); }
+.lp-ping     { animation: lp-ring-ping calc(var(--dur-slow) * var(--da-motion-scale, 1)) var(--ease-out) forwards; }
+.lp-cooldown-pulse { animation: lp-pulse-soft calc(1200ms) var(--ease-in-out) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .lp-pop, .lp-ping, .lp-cooldown-pulse, .lp-confetti { animation: none !important; }
+}
