@@ -58,6 +58,21 @@ export interface LanguageSwitcherProps {
 }
 
 /**
+ * ≥44×44px tap-target floor for the locale buttons (FEN-125 / WCAG 2.5.5). This
+ * control sits in the global nav (app shell + canvas topbar); its short labels
+ * ("FR"/"EN") fall under the touch minimum, so each button gets a full hit area.
+ * Fine visuals remain delegated to the UI/Designer pass.
+ */
+const localeButtonStyle = {
+  minHeight: 44,
+  minWidth: 44,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "0 0.5rem",
+} as const;
+
+/**
  * Minimal accessible language switcher: one button per supported locale, the
  * active one marked `aria-pressed`. Clicking switches in place (no reload) and
  * triggers the store's `onChange` persistence.
@@ -76,6 +91,7 @@ export function LanguageSwitcher({ className }: LanguageSwitcherProps): ReactNod
           type: "button",
           "aria-pressed": code === locale,
           onClick: () => i18n.setLocale(code),
+          style: localeButtonStyle,
         },
         i18n.t(code === "fr" ? "lang.fr" : "lang.en"),
       ),

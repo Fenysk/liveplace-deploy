@@ -14,7 +14,8 @@ export const en = {
   "app.tagline": "A collaborative pixel canvas, live on Twitch",
 
   // Navigation
-  "nav.primary": "Primary",
+  "nav.primary": "Main navigation",
+  "nav.skipToContent": "Skip to content",
   "nav.canvas": "Canvas",
   "nav.gallery": "Gallery",
   "nav.leaderboard": "Leaderboard",
@@ -65,7 +66,11 @@ export const en = {
   "canvas.batchHint": "Tap a cell to select, then Confirm",
 
   // Public profile (F11) — consumed by ProfilePage / profileView
+  // `profile.notFound` is the heading; `.body`/`.cta` form the 404-equivalent
+  // recovery affordance (FEN-125).
   "profile.notFound": "Profile not found",
+  "profile.notFound.body": "We couldn't find a player with that name — they may have changed it, or it never existed.",
+  "profile.notFound.cta": "Discover canvases",
   "profile.memberSince": "Member since {date}",
   "profile.totals": "Totals",
   "profile.pixelsPlaced": "Pixels placed",
@@ -80,6 +85,7 @@ export const en = {
   "gallery.title": "Discover canvases",
   "gallery.viewers": "{count} watching",
   "gallery.empty": "No public canvases live right now.",
+  "gallery.emptyCta": "Open the live canvas",
   "gallery.viewStreamer": "View {name}'s profile",
 
   // Generic

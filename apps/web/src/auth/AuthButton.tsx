@@ -19,6 +19,19 @@ import { Link } from "../router.js";
 import { paths } from "../routes.js";
 import { authClient, signInWithTwitch, signOut } from "./auth-client";
 
+/**
+ * ≥44×44px tap-target floor for the auth control (FEN-125 / WCAG 2.5.5). The
+ * native button/link glyphs are below the touch minimum on a phone; this gives
+ * each interactive element a full-size hit area. Fine visuals stay delegated.
+ */
+const controlTapStyle: React.CSSProperties = {
+  minHeight: 44,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "0 0.75rem",
+};
+
 /** `auth:me` → current user + app profile (or null), referenced by name. */
 const meRef = makeFunctionReference<
   "query",
@@ -33,7 +46,7 @@ export function AuthButton(): React.ReactElement {
 
   if (isPending) {
     return (
-      <button type="button" disabled>
+      <button type="button" disabled style={controlTapStyle}>
         {t("common.loading")}
       </button>
     );
@@ -41,7 +54,7 @@ export function AuthButton(): React.ReactElement {
 
   if (!session) {
     return (
-      <button type="button" onClick={() => void signInWithTwitch()}>
+      <button type="button" onClick={() => void signInWithTwitch()} style={controlTapStyle}>
         {t("auth.signIn")}
       </button>
     );
@@ -61,13 +74,18 @@ export function AuthButton(): React.ReactElement {
         />
       ) : null}
       {login ? (
-        <Link to={paths.profile(login)} aria-label={t("nav.myProfile")} title={t("auth.signedInAs", { name })}>
+        <Link
+          to={paths.profile(login)}
+          aria-label={t("nav.myProfile")}
+          title={t("auth.signedInAs", { name })}
+          style={{ ...controlTapStyle, padding: "0 0.25rem" }}
+        >
           {name}
         </Link>
       ) : (
         <span title={t("auth.signedInAs", { name })}>{name}</span>
       )}
-      <button type="button" onClick={() => void signOut()}>
+      <button type="button" onClick={() => void signOut()} style={controlTapStyle}>
         {t("auth.signOut")}
       </button>
     </span>

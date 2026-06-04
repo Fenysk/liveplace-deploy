@@ -84,7 +84,14 @@ export function GalleryPage(): React.ReactElement {
       <h1 style={titleStyle}>{t(view.titleKey)}</h1>
 
       {view.isEmpty ? (
-        <p style={mutedStyle}>{t(view.emptyKey)}</p>
+        // Empty state keeps the funnel moving (FEN-125): the persistent nav already
+        // prevents a dead-end, but a forward CTA to the live canvas is more inviting.
+        <div>
+          <p style={mutedStyle}>{t(view.emptyKey)}</p>
+          <Link to={paths.canvas()} style={emptyCtaStyle}>
+            {t("gallery.emptyCta")}
+          </Link>
+        </div>
       ) : (
         <>
           <ul style={gridStyle}>
@@ -175,6 +182,17 @@ const pageStyle: React.CSSProperties = {
 };
 const titleStyle: React.CSSProperties = { margin: "0 0 1.5rem" };
 const mutedStyle: React.CSSProperties = { color: "#777" };
+const emptyCtaStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 44,
+  marginTop: "1rem",
+  padding: "0 1.25rem",
+  borderRadius: 8,
+  border: "1px solid #ccc",
+  textDecoration: "none",
+  color: "inherit",
+};
 const gridStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
