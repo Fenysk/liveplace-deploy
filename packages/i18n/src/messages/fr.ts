@@ -50,7 +50,10 @@ export const fr: Catalog = {
   "canvas.state.loading": "La fresque arrive…",
   "canvas.state.ready": "Tu peux poser — {charges} pixels prêts",
   "canvas.state.ready.one": "Tu peux poser — 1 pixel prêt",
-  "canvas.state.cooldown": "Plus de pixels — recharge dans {seconds}s",
+  // Pas de {seconds} ici : le décompte par seconde est porté par la ligne Lot F
+  // (canvas.cooldown.*), orientée futur. Cette ligne rang-1 reste statique → un
+  // lecteur d'écran l'entend une fois, pas à chaque tic (FEN-165, finding 1+2).
+  "canvas.state.cooldown": "Plus de pixels — recharge en cours",
   "canvas.state.signedOut": "Connecte-toi avec Twitch pour poser",
   "canvas.state.frozen": "La pose est en pause",
   "canvas.state.notStarted": "Ça ouvre à {time}",
@@ -93,9 +96,15 @@ export const fr: Catalog = {
   // Décompte orienté futur : viser/armer sa prochaine case pendant la recharge,
   // puis la poser en un geste à 0:00. Pas de « skip cooldown » — on vise en avance.
   "canvas.armHere": "Viser pour la recharge",
-  "canvas.cooldown.waiting": "Vise ta prochaine case pendant la recharge — {seconds}s",
-  "canvas.cooldown.armed": "Prochaine case prête — pose dans {seconds}s",
+  // Les libellés de phase ne portent AUCUN {seconds} : la valeur qui défile est
+  // rendue dans un span aria-hidden distinct (canvas.cooldown.seconds), pour que
+  // la région live n'annonce que les changements de phase, pas chaque seconde
+  // (FEN-165, finding 1). Le décompte visuel par seconde reste pour les voyants.
+  "canvas.cooldown.waiting": "Vise ta prochaine case pendant la recharge",
+  "canvas.cooldown.armed": "Prochaine case prête — pose à la recharge",
   "canvas.cooldown.ready": "Rechargé — valide pour poser ta case",
+  // Compteur visuel uniquement, recopié dans un span aria-hidden (FEN-165).
+  "canvas.cooldown.seconds": "{seconds}s",
 
   // Pose au clavier + annonces lecteur d'écran (FEN-123, WCAG 2.1.1 / 4.1.3)
   "canvas.canvasLabel": "Canevas de pixels",

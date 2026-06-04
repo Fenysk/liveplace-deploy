@@ -107,6 +107,10 @@ export function deriveCooldownView(input: CooldownInput): CooldownView {
   const canArm = staged < capacity;
   const readyToFire = charges > 0 && staged > 0;
 
+  // The cooling-phase messages no longer interpolate {seconds} (FEN-165): the
+  // ticking value is surfaced via `secondsUntilNext` in a separate aria-hidden
+  // visual span, so the live region announces the phase transition once instead
+  // of re-announcing every second. Hence no `params` on the cooling phases.
   if (onCooldown) {
     if (staged > 0) {
       return {
@@ -117,7 +121,6 @@ export function deriveCooldownView(input: CooldownInput): CooldownView {
         canArm,
         readyToFire,
         messageKey: "canvas.cooldown.armed",
-        params: { seconds: secondsUntilNext },
       };
     }
     return {
@@ -128,7 +131,6 @@ export function deriveCooldownView(input: CooldownInput): CooldownView {
       canArm,
       readyToFire,
       messageKey: "canvas.cooldown.waiting",
-      params: { seconds: secondsUntilNext },
     };
   }
 
