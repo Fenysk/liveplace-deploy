@@ -14,10 +14,17 @@ export const en = {
   "app.tagline": "A collaborative pixel canvas, live on Twitch",
 
   // Navigation
+  "nav.primary": "Primary",
   "nav.canvas": "Canvas",
   "nav.gallery": "Gallery",
   "nav.leaderboard": "Leaderboard",
   "nav.profile": "Profile",
+  "nav.myProfile": "Your profile",
+
+  // 404 (FEN-114)
+  "notFound.title": "Page not found",
+  "notFound.body": "This page doesn't exist or has moved.",
+  "notFound.backToCanvas": "Back to the canvas",
 
   // Auth (F1)
   "auth.signIn": "Sign in with Twitch",
@@ -73,6 +80,7 @@ export const en = {
   "gallery.title": "Discover canvases",
   "gallery.viewers": "{count} watching",
   "gallery.empty": "No public canvases live right now.",
+  "gallery.viewStreamer": "View {name}'s profile",
 
   // Generic
   "common.loading": "Loading…",

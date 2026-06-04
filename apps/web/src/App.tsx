@@ -1,36 +1,56 @@
 import { LanguageSwitcher, useTranslate } from "@canvas/i18n/react";
+import type { ReactNode } from "react";
 import { AuthButton } from "./auth/AuthButton.js";
 import { Link } from "./router.js";
+import { paths } from "./routes.js";
 
 /**
- * Minimal app shell. Every visible string goes through `t(...)` so the whole
- * UI switches FR↔EN in place (CA1). This is the seed other MVP features
- * (canvas, gallery, leaderboard, profile) plug into — they reuse the same
- * `useTranslate()` / catalog contract.
+ * Shared page shell (FEN-114). Wraps the non-hero surfaces (gallery, profile,
+ * 404) with a single **persistent global nav** so they stop being islands:
+ * from any of them you can reach the canvas (brand/home) and the gallery
+ * without typing a URL, and the signed-in identity links through to its profile
+ * (handled inside {@link AuthButton}).
+ *
+ * Every visible string goes through `t(...)` so the whole shell switches FR↔EN
+ * in place (CA1). Layout/visuals are intentionally minimal — the fine UI pass is
+ * delegated (Lot G marks shell styling out of scope); only the wiring lives here.
+ *
+ * Note: the per-canvas leaderboard is a rang-3, in-canvas element (D5) and the
+ * board kept that entry light (Q3); it is deliberately NOT promoted to a global
+ * nav item, which would otherwise dead-end (no standalone leaderboard route).
  */
-export function App(): React.ReactElement {
+export function AppShell({ children }: { children: ReactNode }): React.ReactElement {
   const t = useTranslate();
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "3rem auto", padding: "0 1rem" }}>
-      <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "1rem" }}>
-        <h1 style={{ margin: 0 }}>{t("app.title")}</h1>
+    <div style={{ fontFamily: "system-ui, sans-serif" }}>
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "1rem",
+          flexWrap: "wrap",
+          padding: "0.75rem 1rem",
+          borderBottom: "1px solid #e3e3e3",
+        }}
+      >
+        <nav
+          aria-label={t("nav.primary")}
+          style={{ display: "flex", alignItems: "baseline", gap: "1.25rem" }}
+        >
+          <Link to={paths.home()} style={{ fontWeight: 700, textDecoration: "none", color: "inherit" }}>
+            {t("app.title")}
+          </Link>
+          <Link to={paths.canvas()}>{t("nav.canvas")}</Link>
+          <Link to={paths.gallery()}>{t("nav.gallery")}</Link>
+        </nav>
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
           <AuthButton />
           <LanguageSwitcher />
         </div>
       </header>
-      <p style={{ color: "#555" }}>{t("app.tagline")}</p>
 
-      <nav aria-label={t("nav.canvas")} style={{ display: "flex", gap: "1rem", marginTop: "1.5rem" }}>
-        <a href="#canvas">{t("nav.canvas")}</a>
-        <Link to="/gallery">{t("nav.gallery")}</Link>
-        <a href="#leaderboard">{t("nav.leaderboard")}</a>
-        <a href="#profile">{t("nav.profile")}</a>
-      </nav>
-
-      <section style={{ marginTop: "2rem" }}>
-        <p style={{ marginTop: "1rem", color: "#777" }}>{t("canvas.cooldown", { seconds: 5 })}</p>
-      </section>
-    </main>
+      <main style={{ maxWidth: 960, margin: "2rem auto", padding: "0 1rem" }}>{children}</main>
+    </div>
   );
 }

@@ -19,6 +19,8 @@
 import { useQuery } from "convex/react";
 import { api } from "@canvas/convex/api";
 import { useTranslate, useLocale } from "@canvas/i18n/react";
+import { Link } from "../../router.js";
+import { paths } from "../../routes.js";
 import { buildProfileView } from "./profileView.js";
 
 export interface ProfilePageProps {
@@ -88,7 +90,10 @@ export function ProfilePage({ login }: ProfilePageProps) {
           <tbody>
             {view.canvases.map((c) => (
               <tr key={c.canvasSlug}>
-                <td>{c.canvasTitle}</td>
+                {/* maillage (FEN-114): each joined canvas links back to it. */}
+                <td>
+                  <Link to={paths.canvas(c.canvasSlug)}>{c.canvasTitle}</Link>
+                </td>
                 <td>{c.pixelsPlaced}</td>
                 <td>{c.points}</td>
                 <td>{c.bestRank ? t(c.bestRank.key, c.bestRank.params) : "—"}</td>

@@ -27,6 +27,8 @@
 import { usePaginatedQuery } from "convex/react";
 import { makeFunctionReference, type PaginationOptions, type PaginationResult } from "convex/server";
 import { useTranslate, useLocale } from "@canvas/i18n/react";
+import { Link } from "../../router.js";
+import { paths } from "../../routes.js";
 import {
   buildGalleryView,
   type GalleryCardView,
@@ -91,6 +93,7 @@ export function GalleryPage(): React.ReactElement {
                 <GalleryCard
                   card={card}
                   viewersLabel={t(card.viewersKey, { count: card.viewers })}
+                  streamerLabel={t("gallery.viewStreamer", { name: card.streamerDisplayName })}
                 />
               </li>
             ))}
@@ -109,34 +112,53 @@ export function GalleryPage(): React.ReactElement {
 }
 
 /**
- * One discovery card. The whole card is the click target (CA2 → `/c/{slug}`),
- * so it is an anchor — natively keyboard-focusable and announced as a link.
+ * One discovery card. Maillage (FEN-114): two distinct destinations — the
+ * thumbnail+title open the canvas (CA2 → `/c/{slug}`), and the streamer row
+ * links to that streamer's public profile (`/u/{login}`). They can't be one
+ * anchor (no nested links), so the card is a container with two client-side
+ * `Link`s, each natively keyboard-focusable and announced as a link.
  */
-function GalleryCard({ card, viewersLabel }: { card: GalleryCardView; viewersLabel: string }): React.ReactElement {
+function GalleryCard({
+  card,
+  viewersLabel,
+  streamerLabel,
+}: {
+  card: GalleryCardView;
+  viewersLabel: string;
+  streamerLabel: string;
+}): React.ReactElement {
   return (
-    <a href={`/c/${card.slug}`} style={cardStyle} aria-label={`${card.title} — ${viewersLabel}`}>
-      <div style={thumbWrapStyle}>
-        {card.hasThumbnail && card.thumbnailUrl ? (
-          <img src={card.thumbnailUrl} alt="" loading="lazy" style={thumbImgStyle} />
-        ) : (
-          // Placeholder tile — worker hasn't pre-rendered a preview yet (G-Perf3).
-          <div style={thumbPlaceholderStyle} aria-hidden />
-        )}
-        <span style={viewersBadgeStyle}>👁 {viewersLabel}</span>
-      </div>
-
-      <div style={cardBodyStyle}>
-        <strong style={cardTitleStyle}>{card.title}</strong>
-        <span style={streamerRowStyle}>
-          {card.avatarUrl ? (
-            <img src={card.avatarUrl} alt="" style={avatarStyle} />
+    <div style={cardStyle}>
+      <Link
+        to={paths.canvas(card.slug)}
+        style={cardLinkStyle}
+        aria-label={`${card.title} — ${viewersLabel}`}
+      >
+        <div style={thumbWrapStyle}>
+          {card.hasThumbnail && card.thumbnailUrl ? (
+            <img src={card.thumbnailUrl} alt="" loading="lazy" style={thumbImgStyle} />
           ) : (
-            <span style={avatarPlaceholderStyle} aria-hidden />
+            // Placeholder tile — worker hasn't pre-rendered a preview yet (G-Perf3).
+            <div style={thumbPlaceholderStyle} aria-hidden />
           )}
-          <span style={streamerNameStyle}>{card.streamerDisplayName}</span>
-        </span>
-      </div>
-    </a>
+          <span style={viewersBadgeStyle}>👁 {viewersLabel}</span>
+        </div>
+        <strong style={{ ...cardTitleStyle, padding: "0.75rem 0.75rem 0" }}>{card.title}</strong>
+      </Link>
+
+      <Link
+        to={paths.profile(card.streamerLogin)}
+        style={streamerRowStyle}
+        aria-label={streamerLabel}
+      >
+        {card.avatarUrl ? (
+          <img src={card.avatarUrl} alt="" style={avatarStyle} />
+        ) : (
+          <span style={avatarPlaceholderStyle} aria-hidden />
+        )}
+        <span style={streamerNameStyle}>{card.streamerDisplayName}</span>
+      </Link>
+    </div>
   );
 }
 
@@ -161,13 +183,17 @@ const gridStyle: React.CSSProperties = {
   margin: 0,
 };
 const cardStyle: React.CSSProperties = {
-  display: "block",
+  display: "flex",
+  flexDirection: "column",
   border: "1px solid #e3e3e3",
   borderRadius: 10,
   overflow: "hidden",
+  background: "#fff",
+};
+const cardLinkStyle: React.CSSProperties = {
+  display: "block",
   textDecoration: "none",
   color: "inherit",
-  background: "#fff",
 };
 const thumbWrapStyle: React.CSSProperties = {
   position: "relative",
@@ -196,20 +222,22 @@ const viewersBadgeStyle: React.CSSProperties = {
   color: "#fff",
   background: "rgba(0, 0, 0, 0.65)",
 };
-const cardBodyStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  padding: "0.75rem",
-};
 const cardTitleStyle: React.CSSProperties = {
+  display: "block",
   fontSize: 15,
   lineHeight: 1.3,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
 };
-const streamerRowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const streamerRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "0.5rem 0.75rem 0.75rem",
+  textDecoration: "none",
+  color: "inherit",
+};
 const avatarStyle: React.CSSProperties = { width: 22, height: 22, borderRadius: "50%", objectFit: "cover" };
 const avatarPlaceholderStyle: React.CSSProperties = {
   width: 22,

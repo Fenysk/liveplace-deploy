@@ -24,6 +24,8 @@ import type { GaugeState } from "@canvas/protocol";
 import { AuthButton } from "../../auth/AuthButton.js";
 import { authClient, signInWithTwitch } from "../../auth/auth-client.js";
 import { LanguageSwitcher } from "@canvas/i18n/react";
+import { Link } from "../../router.js";
+import { paths } from "../../routes.js";
 import { CanvasRenderer, PALETTE_HEX } from "./renderer.js";
 import { CanvasNetClient, type ConnectionStatus } from "./net.js";
 import { OptimisticPlacement, type PlacementFeedback } from "./placement.js";
@@ -263,6 +265,10 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
         {status !== "open" && (
           <span className="lp-pill">{t(status === "connecting" ? "canvas.connecting" : "canvas.offline")}</span>
         )}
+        {/* canvas → gallery: a light escape hatch so the hero isn't an island (FEN-114). */}
+        <Link to={paths.gallery()} className="lp-navlink">
+          {t("nav.gallery")}
+        </Link>
         <AuthButton />
         <LanguageSwitcher />
       </div>

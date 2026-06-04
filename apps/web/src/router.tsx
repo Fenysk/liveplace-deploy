@@ -1,24 +1,20 @@
 /**
- * Minimal dependency-free SPA router (FEN-45, shared with FEN-34).
+ * Minimal dependency-free SPA router (FEN-45; nav shell + 404 in FEN-114).
  *
- * The web app had no router — `App.tsx` only carried in-page `#anchor` links, so
- * feature pages (ProfilePage `/u/:login`, GalleryPage `/gallery`) were
- * unreachable by URL. Rather than pull in `react-router-dom` (a stack addition
- * that only the Founding Engineer/Alexis can sign off), this is a ~50-line
- * History-API router: enough for the handful of MVP routes, zero new deps.
+ * The web app deliberately has no `react-router` (a stack addition only the
+ * Founding Engineer/Alexis can sign off). This is a ~50-line History-API router:
+ * the reactive `usePathname()` + client-side `<Link>`/`navigate()` primitives,
+ * and a `<Router>` that switches on the pure {@link resolveRoute} (routes.ts).
  *
- * Page routes are `lazy()`-loaded so the home shell keeps booting even before
- * the Convex generated api (`@canvas/convex/api`) is exposed to the web app
- * (that wiring is owned by Dev Full-stack); only navigating to a gated route
- * pulls in the chunk that needs it. Once the api resolves, those routes render
- * with no further change here.
+ * Surfaces split into two layouts:
+ *   - **Hero** (canvas `/`, `/c/:slug`) and the **OBS overlay** render bare —
+ *     the fresco owns the screen (D5: nav is secondary to the canvas-hero).
+ *   - **Page** surfaces (gallery, profile, 404) render inside the shared
+ *     {@link AppShell} so they carry a persistent global nav and are never an
+ *     island/dead-end.
  *
- * Routing rules:
- *   - `/u/:login`  → <ProfilePage login={param} />. The param is passed through
- *     verbatim (only URL-decoded) — login resolution is case-insensitive
- *     SERVER-side via `profiles.by_login`; never pre-normalize on the client.
- *   - `/gallery`   → <GalleryPage /> (canvas discovery list, FEN-34).
- *   - anything else → the home <App /> shell.
+ * Page routes are `lazy()`-loaded so the hero keeps booting regardless of the
+ * Convex-backed chunks.
  */
 import {
   Suspense,
@@ -27,9 +23,11 @@ import {
   type AnchorHTMLAttributes,
   type MouseEvent,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { useTranslate } from "@canvas/i18n/react";
-import { App } from "./App.js";
+import { AppShell } from "./App.js";
+import { resolveRoute } from "./routes.js";
 import { isObsPath } from "./features/canvas/obs.js";
 
 const ProfilePage = lazy(() =>
@@ -43,6 +41,9 @@ const CanvasView = lazy(() =>
 );
 const ObsView = lazy(() =>
   import("./features/canvas/ObsView.js").then((m) => ({ default: m.ObsView })),
+);
+const NotFoundPage = lazy(() =>
+  import("./features/NotFoundPage.js").then((m) => ({ default: m.NotFoundPage })),
 );
 
 /** Subscribe to browser history changes (back/forward + `navigate()`). */
@@ -99,85 +100,62 @@ export function Link({
   return <a href={to} onClick={handleClick} {...rest} />;
 }
 
-/**
- * Match a single-segment-param pattern (e.g. `/u/:login`) against a concrete
- * path. Returns the captured params, or `null` when it doesn't match.
- */
-function matchRoute(pattern: string, path: string): Record<string, string> | null {
-  const patternSegments = pattern.split("/").filter(Boolean);
-  const pathSegments = path.split("/").filter(Boolean);
-  if (patternSegments.length !== pathSegments.length) return null;
-
-  const params: Record<string, string> = {};
-  for (let i = 0; i < patternSegments.length; i++) {
-    const patternSeg = patternSegments[i]!;
-    const pathSeg = pathSegments[i]!;
-    if (patternSeg.startsWith(":")) {
-      params[patternSeg.slice(1)] = pathSeg;
-    } else if (patternSeg !== pathSeg) {
-      return null;
-    }
-  }
-  return params;
-}
-
 /** Inline loading state while a lazy route chunk is fetched. */
 function RouteFallback(): ReactElement {
   const t = useTranslate();
   return <p className="route-loading">{t("common.loading")}</p>;
 }
 
+/** Suspense-wrapped lazy route body. */
+function Lazy({ children }: { children: ReactNode }): ReactElement {
+  return <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
+}
+
 export function Router(): ReactElement {
   const path = usePathname();
 
-  // OBS browser source: `/obs` or `/{slug}/obs` (read-only, transparent). The
-  // slug (possibly nested) is parsed from the URL inside ObsView.
+  // OBS browser source (`/obs`, `/{slug}/obs`): read-only transparent overlay,
+  // no nav chrome. Matched here BEFORE resolveRoute (which treats it as 404).
   if (isObsPath(path)) {
     return (
-      <Suspense fallback={<RouteFallback />}>
+      <Lazy>
         <ObsView />
-      </Suspense>
+      </Lazy>
     );
   }
 
-  // The live canvas is the landing experience: `/` (default canvas) and
-  // `/c/:slug` (a named canvas).
-  if (path === "/" || path === "/canvas") {
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <CanvasView />
-      </Suspense>
-    );
+  const route = resolveRoute(path);
+  switch (route.kind) {
+    case "canvas":
+      // Hero surface — renders bare; its own light topbar carries the gallery link.
+      return (
+        <Lazy>
+          <CanvasView slug={route.slug} />
+        </Lazy>
+      );
+    case "gallery":
+      return (
+        <AppShell>
+          <Lazy>
+            <GalleryPage />
+          </Lazy>
+        </AppShell>
+      );
+    case "profile":
+      return (
+        <AppShell>
+          <Lazy>
+            <ProfilePage login={route.login} />
+          </Lazy>
+        </AppShell>
+      );
+    case "notFound":
+      return (
+        <AppShell>
+          <Lazy>
+            <NotFoundPage />
+          </Lazy>
+        </AppShell>
+      );
   }
-  const canvasSlug = matchRoute("/c/:slug", path);
-  if (canvasSlug) {
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <CanvasView slug={decodeURIComponent(canvasSlug.slug!)} />
-      </Suspense>
-    );
-  }
-
-  const profile = matchRoute("/u/:login", path);
-  if (profile) {
-    // Decode `%xx` (e.g. unusual logins) but DO NOT lower-case — the server
-    // resolves login case-insensitively; pre-normalizing here would mask that.
-    const login = decodeURIComponent(profile.login!);
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <ProfilePage login={login} />
-      </Suspense>
-    );
-  }
-
-  if (path === "/gallery") {
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <GalleryPage />
-      </Suspense>
-    );
-  }
-
-  // Home shell. Unknown paths fall back here for the MVP (no dedicated 404).
-  return <App />;
 }

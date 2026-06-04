@@ -10,10 +10,17 @@ export const fr: Catalog = {
   "app.tagline": "Une toile de pixels collaborative, en direct sur Twitch",
 
   // Navigation
+  "nav.primary": "Principale",
   "nav.canvas": "Toile",
   "nav.gallery": "Galerie",
   "nav.leaderboard": "Classement",
   "nav.profile": "Profil",
+  "nav.myProfile": "Ton profil",
+
+  // 404 (FEN-114)
+  "notFound.title": "Page introuvable",
+  "notFound.body": "Cette page n'existe pas ou a été déplacée.",
+  "notFound.backToCanvas": "Retour à la toile",
 
   // Auth (F1)
   "auth.signIn": "Se connecter avec Twitch",
@@ -69,6 +76,7 @@ export const fr: Catalog = {
   "gallery.title": "Découvrir les toiles",
   "gallery.viewers": "{count} spectateurs",
   "gallery.empty": "Aucune toile publique en direct pour le moment.",
+  "gallery.viewStreamer": "Voir le profil de {name}",
 
   // Generic
   "common.loading": "Chargement…",
