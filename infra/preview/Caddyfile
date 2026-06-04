@@ -1,0 +1,44 @@
+# LivePlace — LOCAL UI-maquette preview proxy (FEN-195, owned by DevOps).
+#
+# This is the `test-liveplace.nas` preview edge. It is DELIBERATELY decoupled
+# from production (liveplace.tv / Coolify): no TLS, no Convex, no gateway, no
+# auth — just a static file server for the UI Designer's built maquettes so
+# Alexis can validate the design OFF production, on his LAN.
+#
+# Site address `:80` (not a bare host) = a real plain-HTTP listener that accepts
+# ALL hostnames (FEN-78 #4). That means it serves identically whether reached by
+#   - http://test-liveplace.nas       (LAN DNS -> NAS IP, the canonical target)
+#   - http://<nas-lan-ip>:<port>      (no DNS needed)
+#   - a Cloudflare quick-tunnel URL    (optional remote validation)
+# without per-host matching surprises. The host port is mapped in
+# docker-compose.preview.yml (PREVIEW_PORT, default 8088 -> container :80).
+{
+	admin off
+	# Never attempt Let's Encrypt / on-demand TLS: this is LAN HTTP-only.
+	auto_https off
+}
+
+:80 {
+	encode gzip zstd
+
+	# Cheap liveness endpoint for the compose healthcheck and smoke checks.
+	respond /healthz 200 {
+		body "ok"
+	}
+
+	# Minimal hardening (this is a non-prod preview, not the public edge).
+	header {
+		X-Content-Type-Options "nosniff"
+		-Server
+		# Preview is ephemeral/non-authoritative — don't let it get cached hard.
+		Cache-Control "no-store"
+	}
+
+	# Serve the built maquettes. The UI Designer / Dev Frontend rebuild drops
+	# fresh assets into ./preview/site (bind-mounted read-only at /srv/site), so
+	# a rebuild is reflected immediately — no container rebuild needed.
+	root * /srv/site
+	# SPA fallback: unknown non-asset routes return index.html (client routing).
+	try_files {path} /index.html
+	file_server
+}

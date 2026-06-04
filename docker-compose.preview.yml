@@ -1,0 +1,66 @@
+# LivePlace — LOCAL UI-maquette preview (FEN-195, owned by DevOps).
+#
+# Goal: serve the UI Designer's maquettes on `test-liveplace.nas` so Alexis can
+# validate the design OFF production. This stack is INTENTIONALLY isolated from
+# the production stack (docker-compose.yml / Coolify / liveplace.tv):
+#   - its own compose project name (`liveplace-preview`) => separate containers,
+#     network and lifecycle — `up`/`down` here never touches prod,
+#   - NO shared volumes, NO Redis/Convex/gateway/auth — pure static hosting,
+#   - plain HTTP on the LAN (no TLS, no Let's Encrypt, no Twitch callback).
+#
+# Run it on the NAS Docker executor (NOT Coolify):
+#   docker compose -f docker-compose.preview.yml up -d
+# or via the wrapper: scripts/preview-nas.sh up
+#
+# The served content is whatever lives in ./preview/site (bind-mounted). Initial
+# content is a committed placeholder; the documented update flow rebuilds the web
+# app and syncs apps/web/dist into ./preview/site (see docs/runbooks/preview-nas.md).
+name: liveplace-preview
+
+services:
+  preview:
+    image: caddy:2-alpine
+    # Map a host port to the in-container :80 (see infra/preview/Caddyfile).
+    # Default 8088 avoids clashing with DSM/other services on :80. To get a bare
+    # http://test-liveplace.nas with no port, set PREVIEW_PORT=80 (if free).
+    ports:
+      - "${PREVIEW_PORT:-8088}:80"
+    volumes:
+      # Static maquettes (built assets or the placeholder), read-only.
+      - ./preview/site:/srv/site:ro
+      # Preview proxy config, read-only. Bind-mount is fine here — this stack is
+      # bare-NAS Docker, NOT Coolify (the FEN-80 bind-mount-as-dir hazard was
+      # Coolify-deploy-artifact specific).
+      - ./infra/preview/Caddyfile:/etc/caddy/Caddyfile:ro
+    healthcheck:
+      # caddy:2-alpine ships wget (busybox). /healthz returns 200 (Caddyfile).
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    restart: unless-stopped
+
+  # OPTIONAL persistent remote-access tunnel (profile-gated, FEN-195).
+  #
+  # Anonymous Cloudflare quick-tunnel: exposes the preview edge as a public
+  # https://<random>.trycloudflare.com URL with NO Cloudflare account, NO token,
+  # NO DNS, and NO inbound port opened on the NAS. Proven reachable end-to-end on
+  # the placeholder (agent ran cloudflared -> CF edge -> caddy -> HTTP 200 on
+  # /healthz, the page, and the SPA fallback). Run as a `restart: unless-stopped`
+  # container on the (persistent) NAS host, the URL stays up as long as the NAS
+  # is up — that is the persistent agent-hosted preview path, NOT an ephemeral
+  # heartbeat. The URL is random and rotates on container restart (fine for design
+  # review; a STABLE hostname needs a named tunnel + account token = account-bound).
+  #
+  # Enable only when remote validation is wanted:
+  #   docker compose -f docker-compose.preview.yml --profile tunnel up -d
+  #   docker compose -f docker-compose.preview.yml logs cloudflared   # read the URL
+  # or: scripts/preview-nas.sh tunnel
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "--url", "http://preview:80"]
+    depends_on:
+      - preview
+    restart: unless-stopped

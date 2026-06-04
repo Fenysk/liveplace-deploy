@@ -1,0 +1,7 @@
+# preview/site is the LIVE content dir served on test-liveplace.nas. The UI
+# Designer / Dev Frontend build (scripts/preview-nas.sh update) drops built
+# maquette assets here at runtime — those are NOT committed. Only the placeholder
+# index.html (and this file) are tracked. See docs/runbooks/preview-nas.md.
+*
+!.gitignore
+!index.html
