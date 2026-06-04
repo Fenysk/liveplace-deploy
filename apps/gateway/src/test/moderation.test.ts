@@ -14,6 +14,7 @@ import {
   flushRequestChannel,
   type ModerationRedis,
 } from "../moderation";
+import { MODERATION_EVENT_CHANNEL, parseModerationEvent } from "../schema";
 
 const CID = "streamerlogin";
 const K = canvasKeys(CID);
@@ -47,8 +48,8 @@ test("moderate() runs moderate.lua on the canvas keys and echoes the bumped vers
   const out = await service(redis).moderate([{ x: 1, y: 1, color: 3 }, { x: 2, y: 2, color: 0 }]);
 
   assert.deepEqual(out, { applied: 2, version: 42 });
-  assert.equal(redis.calls.length, 1);
-  const [keys, argv] = redis.calls[0]!.args as [string[], string[]];
+  const evalCall = redis.calls.find((c) => c.op === "evalModerate")!;
+  const [keys, argv] = evalCall.args as [string[], string[]];
   assert.deepEqual(keys, [K.pixels, K.meta, K.stream]); // durable stream on
   // ARGV: width, height, paletteSize, channel, actor("" = system), ts, count, triples
   assert.deepEqual(argv, [
@@ -56,6 +57,28 @@ test("moderate() runs moderate.lua on the canvas keys and echoes the bumped vers
     "1", "1", "3",
     "2", "2", "0",
   ]);
+});
+
+test("moderate() announces an action-level moderationEvent when cells were applied (FEN-156)", async () => {
+  const redis = new RecordingRedis();
+  redis.moderateReply = [2, 42];
+  await service(redis).moderate([{ x: 1, y: 1, color: 3 }, { x: 2, y: 2, color: 0 }]);
+
+  const pub = redis.calls.find((c) => c.op === "publish");
+  assert.ok(pub, "expected a moderation-event publish");
+  const [channel, payload] = pub!.args as [string, string];
+  assert.equal(channel, MODERATION_EVENT_CHANNEL);
+  // The fanned-out event carries the canvas, the action's last write seq, and the
+  // cell count — what every instance needs to push a `moderationEvent` frame.
+  assert.deepEqual(parseModerationEvent(payload), { canvasId: CID, version: 42, cells: 2 });
+});
+
+test("moderate() does NOT announce when nothing was applied (malformed batch is silent)", async () => {
+  const redis = new RecordingRedis();
+  redis.moderateReply = [0, 0]; // applied=0 ⇒ no visual change ⇒ no event
+  await service(redis).moderate([{ x: 9999, y: 9999, color: 3 }]);
+
+  assert.equal(redis.calls.find((c) => c.op === "publish"), undefined);
 });
 
 test("setFrozen toggles the canvas:frozen flag (SET '1' / DEL)", async () => {

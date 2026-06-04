@@ -46,7 +46,33 @@ already decided the colours (`0` = erase, otherwise the colour to (re)write).
 ```
 
 Response `2xx`; echo `{ "version": N }` (the last bumped write counter) so Convex
-can stamp `pixelModeration.overwriteVersion`.
+can stamp `pixelModeration.overwriteVersion`. The response also reports `applied`
+(cells actually written).
+
+### Viewer fan-out side-effect — `moderationEvent` (FEN-156)
+
+A wipe reaches a connected viewer as ordinary `delta` frames, indistinguishable
+from normal placements — so the fresco changes with no explanation (the anxiety
+UX Lot I / FEN-121 fixes; the viewer reducer `moderationNotice.ts` is ready and
+keys off a monotonic `bulkChangeSeq`). To give the bulk overwrite an attribution
+the deltas lack, the gateway — when `moderate.lua` applied **≥ 1** cell — emits an
+**action-level** signal, distinct from a reconnect `resyncRequired` (a network
+event, which must NOT read as moderation):
+
+- The gateway that handled the call publishes ONE message on the gateway-only
+  Redis channel `canvas:moderation-events` (`MODERATION_EVENT_CHANNEL`, payload
+  JSON `{ canvasId, version, cells }`). This is the cross-instance fan-out the
+  per-pixel deltas already use, mirrored, so a viewer connected to ANY gateway
+  instance is notified — not just those on the instance that received the HTTP call.
+- Every instance subscribes and re-broadcasts to its local viewers the additive
+  `@canvas/protocol` frame `{ t: "moderationEvent", version, cells }` (server →
+  client only; an unaware client ignores it and still applies the deltas, so
+  `PROTOCOL_VERSION` stays 1). The web `net.ts` bumps `bulkChangeSeq` on it and
+  `areaChanged` lights up with no further VM work.
+
+A 0-applied call (malformed batch) changed nothing visible → no event. A pure ban
+(no `/internal/moderate`) and a freeze/unfreeze are NOT announced here: nothing was
+overwritten; freeze legibility is already observable via `canPlace`→`placement_closed`.
 
 ## `POST /internal/ban`
 
