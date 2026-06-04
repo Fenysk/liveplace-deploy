@@ -1,18 +1,21 @@
 /**
- * Live canvas client (FEN-65) — the interactive F3 surface wired to the F4
- * optimism/rollback controller over the FROZEN `@canvas/protocol`.
+ * Live canvas client (FEN-65, batch-pose model FEN-113) — the interactive F3
+ * surface wired to the F4 optimism/rollback controller over the FROZEN
+ * `@canvas/protocol`.
  *
- * Data flow:
- *   gateway socket ──► CanvasNetClient ──► binary snapshot/delta ──► CanvasRenderer
- *                                     └──► ack/error/cooldown/gauge ──► OptimisticPlacement
- *   user click ──► CanvasRenderer.onPlace ──► OptimisticPlacement.place() (paints
- *                  optimistically + returns the wire msg) ──► CanvasNetClient.place()
+ * Pose model — "sélection multiple → validation" (FEN-113):
+ *   - Desktop: hover frames a cell, a click stages it (toggle / recolor with the
+ *     current tool); drag still pans, wheel zooms.
+ *   - Mobile: the first tap reveals "Dessiner" (Draw); entering draw mode, taps
+ *     stage cells, one-finger drag pans, two-finger pinch zooms (renderer.ts).
+ *   - The staged batch ({@link BatchSelection}) is capped at the available gauge
+ *     (k/N) and supports multi-colour + eraser per cell. "Valider" commits the
+ *     whole batch in one action; "Annuler" clears it.
+ *   - Commit reuses the per-`cid` reconciliation in {@link OptimisticPlacement}:
+ *     one `place{cid}` per cell, so a partial server refusal rolls back only the
+ *     rejected cells (the rest stay). The express 1-cell path is tap → Valider.
  *
- * The renderer doubles as the F4 {@link PlacementSurface}, so an optimistic pose
- * paints immediately and is committed (`ack`) or rolled back (`error`/`cooldown`)
- * on the gateway's verdict. The gauge/cooldown HUD (D1) and refusal toasts are
- * driven by the controller's `onGauge` / `onFeedback` callbacks, every string via
- * `@canvas/i18n` so the UI is FR/EN in place.
+ * Every user string flows through `@canvas/i18n` so the UI is FR/EN in place.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslate } from "@canvas/i18n/react";
@@ -22,7 +25,8 @@ import { AuthButton } from "../../auth/AuthButton.js";
 import { LanguageSwitcher } from "@canvas/i18n/react";
 import { CanvasRenderer, PALETTE_HEX } from "./renderer.js";
 import { CanvasNetClient, type ConnectionStatus } from "./net.js";
-import { EMPTY_COLOR, OptimisticPlacement, type PlacementFeedback } from "./placement.js";
+import { OptimisticPlacement, type PlacementFeedback } from "./placement.js";
+import { BatchSelection, EMPTY_COLOR } from "./selection.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
@@ -30,7 +34,7 @@ const DEFAULT_COLOR = 5; // red — a visible default pose colour
 const TOAST_MS = 2600;
 
 interface ToastState {
-  kind: PlacementFeedback["kind"];
+  kind: PlacementFeedback["kind"] | "cap";
   messageKey: string;
   params?: Record<string, string | number>;
 }
@@ -46,9 +50,11 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const netRef = useRef<CanvasNetClient | null>(null);
   const placementRef = useRef<OptimisticPlacement | null>(null);
+  const selectionRef = useRef<BatchSelection>(new BatchSelection(0));
+  const hoverRef = useRef<{ x: number; y: number } | null>(null);
 
-  // selection mirrored into refs so the renderer's place callback reads the
-  // latest value without being re-bound on every change.
+  // current tool, mirrored into refs so the renderer's tap callback (bound once)
+  // always reads the latest value without re-binding.
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [erasing, setErasing] = useState(false);
   const colorRef = useRef(color);
@@ -56,15 +62,64 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   colorRef.current = color;
   erasingRef.current = erasing;
 
+  // Mobile gate: the first touch reveals "Dessiner"; desktop selects directly.
+  const [drawing, setDrawing] = useState(false);
+  const drawingRef = useRef(drawing);
+  drawingRef.current = drawing;
+  const [armed, setArmed] = useState<{ x: number; y: number } | null>(null);
+
   const [gauge, setGauge] = useState<GaugeState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [viewers, setViewers] = useState<number | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [selVersion, setSelVersion] = useState(0); // bumped on every batch change
   const [, setTick] = useState(0); // drives the per-second cooldown countdown
 
-  const showToast = useCallback((f: PlacementFeedback) => {
+  /** Push the staged batch + hovered cell to the renderer and re-render the HUD. */
+  const syncOverlay = useCallback(() => {
+    rendererRef.current?.setOverlay(selectionRef.current.entries(), hoverRef.current);
+    setSelVersion((n) => n + 1);
+  }, []);
+
+  const showToast = useCallback((f: ToastState) => {
     setToast({ kind: f.kind, messageKey: f.messageKey, params: f.params });
   }, []);
+
+  // Stage / toggle / recolor a cell with the current tool (the batch gesture).
+  const stageCell = useCallback(
+    (x: number, y: number) => {
+      const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
+      const r = selectionRef.current.apply(x, y, c);
+      if (r.kind === "cap") {
+        showToast({ kind: "cap", messageKey: "canvas.feedback.capReached", params: { max: r.cap } });
+      } else if (r.kind === "locked") {
+        showToast({ kind: "banned", messageKey: "canvas.feedback.banned" });
+      }
+      syncOverlay();
+    },
+    [showToast, syncOverlay],
+  );
+
+  // Commit the whole batch: one place{cid} per cell, reconciled per cid.
+  const validate = useCallback(() => {
+    const placement = placementRef.current;
+    if (!placement) return;
+    const cells = selectionRef.current.take();
+    for (const cell of cells) {
+      const msg = placement.place(cell.x, cell.y, cell.color);
+      if (msg) netRef.current?.place(msg);
+    }
+    setArmed(null);
+    syncOverlay();
+  }, [syncOverlay]);
+
+  // Annuler: empty the batch and leave draw mode.
+  const cancel = useCallback(() => {
+    selectionRef.current.clear();
+    setArmed(null);
+    setDrawing(false);
+    syncOverlay();
+  }, [syncOverlay]);
 
   // Auto-dismiss the toast.
   useEffect(() => {
@@ -81,6 +136,12 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     return () => clearInterval(id);
   }, [gauge]);
 
+  // The gauge ceiling drives the batch cap (k/N).
+  useEffect(() => {
+    selectionRef.current.setCapacity(gauge?.charges ?? 0);
+    setSelVersion((n) => n + 1);
+  }, [gauge]);
+
   // Mount: build renderer + net client, connect. Teardown on unmount.
   useEffect(() => {
     const el = canvasRef.current;
@@ -89,12 +150,18 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     const renderer = new CanvasRenderer(
       el,
       {
-        onPlace: (x, y) => {
-          const placement = placementRef.current;
-          if (!placement) return;
-          const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
-          const msg = placement.place(x, y, c);
-          if (msg) netRef.current?.place(msg);
+        onTap: (x, y, pointerType) => {
+          // Desktop (mouse/pen) or already in draw mode → stage directly.
+          if (pointerType === "mouse" || pointerType === "pen" || drawingRef.current) {
+            stageCell(x, y);
+            return;
+          }
+          // Mobile first touch → reveal "Dessiner" for this cell (no accidental pose).
+          setArmed({ x, y });
+        },
+        onHover: (cell) => {
+          hoverRef.current = cell;
+          rendererRef.current?.setOverlay(selectionRef.current.entries(), cell);
         },
       },
       { interactive: true },
@@ -105,7 +172,6 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       url: gatewayWsUrl(slug),
       handlers: {
         onWelcome: (w) => {
-          // Create the controller once, with the authoritative geometry.
           if (!placementRef.current) {
             placementRef.current = new OptimisticPlacement({
               width: w.width,
@@ -113,14 +179,15 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
               paletteSize: renderer.paletteSize,
               surface: renderer,
               onGauge: setGauge,
-              onFeedback: showToast,
+              onFeedback: (f) => {
+                if (f.kind === "banned") selectionRef.current.setLocked(true);
+                showToast(f);
+              },
             });
           }
         },
         onBinary: (buf) => {
           const seq = renderer.applyBinary(buf);
-          // After a (re)snapshot, re-apply still-pending optimistic pixels onto
-          // the fresh base so a later rollback stays correct (no-op on connect).
           placementRef.current?.repaintPending();
           return seq;
         },
@@ -143,10 +210,14 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       netRef.current = null;
       placementRef.current = null;
     };
-  }, [slug, showToast]);
+  }, [slug, showToast, stageCell]);
 
   const onCooldown = gauge !== null && gauge.charges <= 0 && gauge.cooldownUntil > Date.now();
   const cooldownSeconds = onCooldown ? Math.max(0, Math.ceil((gauge!.cooldownUntil - Date.now()) / 1000)) : 0;
+
+  const sel = selectionRef.current;
+  const count = sel.count; // re-read each render; selVersion forces the refresh
+  void selVersion;
 
   return (
     <div className="lp-app">
@@ -169,7 +240,9 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
             ? t("canvas.connecting")
             : onCooldown
               ? t("canvas.cooldown", { seconds: cooldownSeconds })
-              : t("canvas.gauge", { current: gauge.charges, max: gauge.max })}
+              : count > 0
+                ? t("canvas.batchCount", { count, max: sel.capacity })
+                : t("canvas.gauge", { current: gauge.charges, max: gauge.max })}
         </p>
 
         <div className="lp-palette" role="group" aria-label={t("canvas.palette")}>
@@ -190,15 +263,39 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
         </div>
 
         <div className="lp-tools">
-          <button
-            type="button"
-            className="lp-btn"
-            aria-pressed={erasing}
-            onClick={() => setErasing((e) => !e)}
-          >
+          <button type="button" className="lp-btn" aria-pressed={erasing} onClick={() => setErasing((e) => !e)}>
             {t("canvas.erase")}
           </button>
+
+          {/* Mobile gate: confirm intent to draw on the armed cell. */}
+          {armed && !drawing && (
+            <button
+              type="button"
+              className="lp-btn is-primary"
+              onClick={() => {
+                setDrawing(true);
+                stageCell(armed.x, armed.y);
+                setArmed(null);
+              }}
+            >
+              {t("canvas.draw")}
+            </button>
+          )}
+
+          {/* Valider / Annuler appear once the batch is non-empty. */}
+          {count > 0 && (
+            <>
+              <button type="button" className="lp-btn is-primary" disabled={sel.isLocked} onClick={validate}>
+                {t("canvas.validate", { count })}
+              </button>
+              <button type="button" className="lp-btn" onClick={cancel}>
+                {t("canvas.cancel")}
+              </button>
+            </>
+          )}
         </div>
+
+        {count === 0 && !armed && <p className="lp-hint">{t("canvas.batchHint")}</p>}
       </div>
 
       {toast && (

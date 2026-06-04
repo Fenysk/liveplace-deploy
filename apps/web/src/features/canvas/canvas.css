@@ -50,6 +50,18 @@ html.lp-obs-root body {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+/* canvas → gallery escape hatch: light, secondary to the hero (FEN-114). */
+.lp-navlink {
+  background: rgba(0, 0, 0, 0.6);
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+}
+.lp-navlink:hover {
+  text-decoration: underline;
+}
 
 .lp-hud {
   position: fixed;
@@ -97,6 +109,7 @@ html.lp-obs-root body {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .lp-btn {
   background: rgba(0, 0, 0, 0.6);
@@ -113,6 +126,27 @@ html.lp-obs-root body {
 }
 .lp-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+/* Primary action (Dessiner / Valider) — the batch-commit affordance (FEN-113). */
+.lp-btn.is-primary {
+  background: #a970ff;
+  border-color: #a970ff;
+  color: #fff;
+  font-weight: 700;
+}
+.lp-btn.is-primary:hover {
+  background: #9355f5;
+}
+.lp-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Just-enough prompt explaining how to start a batch (UI lot will style fully). */
+.lp-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  opacity: 0.7;
 }
 
 /* Ephemeral feedback toast (placement refusals / local rejections). */

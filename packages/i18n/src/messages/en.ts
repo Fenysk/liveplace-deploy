@@ -48,6 +48,14 @@ export const en = {
   "canvas.feedback.rateLimited": "Slow down — try again in a moment",
   "canvas.feedback.signInRequired": "Sign in with Twitch to place pixels",
   "canvas.feedback.error": "Couldn't place that pixel — try again",
+  "canvas.feedback.capReached": "Gauge full ({max}) — confirm or remove a pixel",
+
+  // Batch pose: "selection → validation" model (FEN-113)
+  "canvas.draw": "Draw",
+  "canvas.validate": "Confirm {count}",
+  "canvas.cancel": "Cancel",
+  "canvas.batchCount": "{count}/{max} selected",
+  "canvas.batchHint": "Tap a cell to select, then Confirm",
 
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profile not found",

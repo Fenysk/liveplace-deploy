@@ -38,10 +38,25 @@ export interface RendererHooks {
   /** A genuine click (no drag) on cell (x,y). Not fired in non-interactive mode. */
   onPlace?: (x: number, y: number) => void;
   /**
+   * A genuine tap/click (no drag, single pointer) on cell (x,y) — the FEN-113
+   * batch-selection entry point. `pointerType` is "mouse" | "touch" | "pen" so
+   * the UI can gate touch behind an explicit "Dessiner" step while letting a
+   * desktop click select directly. A multi-touch pinch never fires this.
+   */
+  onTap?: (x: number, y: number, pointerType: string) => void;
+  /**
    * Pointer is hovering cell (x,y) at viewport-relative client coords, or null
    * when the pointer leaves the canvas / is panning. Drives the pixel readout.
    */
   onHover?: (cell: { x: number; y: number } | null, clientX: number, clientY: number) => void;
+}
+
+/** A staged cell drawn as a preview rectangle (FEN-113 selection overlay). */
+export interface OverlayCell {
+  x: number;
+  y: number;
+  /** Palette index to preview; EMPTY (0) is drawn as an "erase" marker. */
+  color: number;
 }
 
 export interface RendererOptions {
@@ -97,13 +112,22 @@ export class CanvasRenderer {
   private raf = 0;
   private loaded = false;
 
-  // pointer interaction state
-  private pointerId: number | null = null;
-  private dragging = false;
-  private moved = false;
-  private lastX = 0;
-  private lastY = 0;
+  // pointer interaction state — a Map of active pointers supports 1-finger pan +
+  // 2-finger pinch/pan (mobile) alongside desktop hover/click (FEN-113).
+  private readonly pointers = new Map<number, { x: number; y: number }>();
+  private moved = false; // the current gesture dragged/pinched past the tap threshold
+  private downX = 0; // first pointer's down position (tap-vs-drag origin)
+  private downY = 0;
+  private downType = "mouse";
+  private pinchDist = 0; // baseline finger distance for the active pinch (device px)
+  private pinchMidX = 0; // baseline pinch midpoint (device px)
+  private pinchMidY = 0;
   private readonly resizeObserver: ResizeObserver;
+
+  // selection-preview overlay (FEN-113) — the renderer draws staged cells + the
+  // hovered cell on top of the live board; the batch state itself lives in React.
+  private overlay: readonly OverlayCell[] = [];
+  private hoverCell: { x: number; y: number } | null = null;
 
   private readonly interactive: boolean;
   private readonly background: string | null;
@@ -259,6 +283,19 @@ export class CanvasRenderer {
     return PALETTE_SIZE;
   }
 
+  // --- selection overlay (F3 / FEN-113) -------------------------------------
+
+  /**
+   * Set the staged-selection preview (and optional hovered cell) the renderer
+   * paints over the live board. Cheap O(1) swap + coalesced repaint; the actual
+   * batch lives in the React layer. Pass `[]` / `null` to clear.
+   */
+  setOverlay(cells: readonly OverlayCell[], hover: { x: number; y: number } | null = null): void {
+    this.overlay = cells;
+    this.hoverCell = hover;
+    this.dirty = true;
+  }
+
   // --- view control ---------------------------------------------------------
 
   recenter(): void {
@@ -302,6 +339,52 @@ export class CanvasRenderer {
     ctx.setTransform(this.view.scale, 0, 0, this.view.scale, this.view.tx, this.view.ty);
     ctx.drawImage(this.offscreen, 0, 0);
     if (this.grid) this.drawGrid();
+    if (this.interactive) this.drawOverlay();
+  }
+
+  /**
+   * Draw the selection preview: each staged cell as a translucent fill of its
+   * chosen colour (erase as a hollow dashed cell) plus a crisp outline, and the
+   * hovered cell as a thin frame. Purely a *preview* — these pixels are not in
+   * the board buffer until the batch is committed. Visual styling is delegated
+   * (UI lot); this is the strict-minimum-usable affordance.
+   */
+  private drawOverlay(): void {
+    if (this.overlay.length === 0 && !this.hoverCell) return;
+    const ctx = this.ctx;
+    const s = this.view.scale;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const px = (x: number) => this.view.tx + x * s;
+    const py = (y: number) => this.view.ty + y * s;
+
+    for (const cell of this.overlay) {
+      const x = px(cell.x);
+      const y = py(cell.y);
+      if (cell.color === 0) {
+        // erase: hollow dashed cell so it reads differently from a colour pose
+        ctx.setLineDash([Math.max(2, s / 4), Math.max(2, s / 4)]);
+        ctx.lineWidth = Math.max(1, s / 8);
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+        ctx.setLineDash([]);
+      } else {
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = PALETTE_HEX[cell.color] ?? "#ffffff";
+        ctx.fillRect(x, y, s, s);
+        ctx.globalAlpha = 1;
+      }
+      ctx.lineWidth = Math.max(1, s / 10);
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+    }
+
+    if (this.hoverCell) {
+      const x = px(this.hoverCell.x);
+      const y = py(this.hoverCell.y);
+      ctx.lineWidth = Math.max(1, s / 12);
+      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.strokeRect(x + 0.5, y + 0.5, s - 1, s - 1);
+    }
   }
 
   private drawGrid(): void {
@@ -337,59 +420,132 @@ export class CanvasRenderer {
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("pointerup", this.onPointerUp);
+    this.canvas.addEventListener("pointercancel", this.onPointerCancel);
     this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    // Suppress the browser's own pinch-zoom / scroll so two-finger gestures drive
+    // the canvas view instead of the page (mobile parity).
+    this.canvas.style.touchAction = "none";
   }
 
   private unbindInput(): void {
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
+    this.canvas.removeEventListener("pointercancel", this.onPointerCancel);
     this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("wheel", this.onWheel);
   }
 
+  /** Device-pixel position of a pointer event, viewport-relative. */
+  private devicePos(e: PointerEvent): { x: number; y: number } {
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: (e.clientX - rect.left) * this.dpr, y: (e.clientY - rect.top) * this.dpr };
+  }
+
   private onPointerDown = (e: PointerEvent): void => {
-    this.pointerId = e.pointerId;
-    this.dragging = true;
-    this.moved = false;
-    this.lastX = e.clientX;
-    this.lastY = e.clientY;
+    const wasIdle = this.pointers.size === 0;
+    this.pointers.set(e.pointerId, this.devicePos(e));
     this.canvas.setPointerCapture(e.pointerId);
+    if (wasIdle) {
+      // first finger/button down — candidate tap origin
+      this.moved = false;
+      this.downX = e.clientX;
+      this.downY = e.clientY;
+      this.downType = e.pointerType || "mouse";
+      this.hooks.onHover?.(null, e.clientX, e.clientY);
+    }
+    if (this.pointers.size === 2) {
+      // second finger down — a pinch can never resolve to a tap
+      this.moved = true;
+      this.beginPinch();
+    }
   };
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (this.dragging && e.pointerId === this.pointerId) {
-      const dx = e.clientX - this.lastX;
-      const dy = e.clientY - this.lastY;
-      if (!this.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) this.moved = true;
-      if (this.moved) {
-        this.view.panBy(dx * this.dpr, dy * this.dpr);
-        this.lastX = e.clientX;
-        this.lastY = e.clientY;
-        this.dirty = true;
-        this.hooks.onHover?.(null, e.clientX, e.clientY);
-      }
+    // Hover readout only when no button/finger is down (desktop survol).
+    if (this.pointers.size === 0) {
+      this.hooks.onHover?.(this.toCell(e.clientX, e.clientY), e.clientX, e.clientY);
       return;
     }
-    this.hooks.onHover?.(this.toCell(e.clientX, e.clientY), e.clientX, e.clientY);
+    const prev = this.pointers.get(e.pointerId);
+    if (!prev) return;
+    const cur = this.devicePos(e);
+
+    if (this.pointers.size >= 2) {
+      this.pointers.set(e.pointerId, cur);
+      this.updatePinch();
+      this.hooks.onHover?.(null, e.clientX, e.clientY);
+      return;
+    }
+
+    // single pointer → pan once past the tap threshold; delta vs the last sample
+    // for THIS pointer (so a 2→1 finger lift never jumps the view).
+    const dx = e.clientX - this.downX;
+    const dy = e.clientY - this.downY;
+    if (!this.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) this.moved = true;
+    if (this.moved) {
+      this.view.panBy(cur.x - prev.x, cur.y - prev.y);
+      this.dirty = true;
+      this.hooks.onHover?.(null, e.clientX, e.clientY);
+    }
+    this.pointers.set(e.pointerId, cur);
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.pointerId !== this.pointerId) return;
-    const wasClick = this.dragging && !this.moved;
-    this.dragging = false;
-    this.pointerId = null;
+    if (!this.pointers.has(e.pointerId)) return;
+    const wasSingle = this.pointers.size === 1;
+    this.pointers.delete(e.pointerId);
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
-    if (wasClick) {
+
+    // A genuine tap: it was the only pointer and the gesture never moved/pinched.
+    if (wasSingle && !this.moved) {
       const cell = this.toCell(e.clientX, e.clientY);
-      if (cell) this.hooks.onPlace?.(cell.x, cell.y);
+      if (cell) {
+        this.hooks.onTap?.(cell.x, cell.y, this.downType);
+        this.hooks.onPlace?.(cell.x, cell.y); // back-compat (legacy direct-place)
+      }
     }
+    // Going 2→1 fingers keeps `moved` true (this gesture was a pinch); the
+    // survivor's stored device pos is its delta baseline, so no view jump.
+  };
+
+  private onPointerCancel = (e: PointerEvent): void => {
+    this.pointers.delete(e.pointerId);
+    if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
   };
 
   private onPointerLeave = (e: PointerEvent): void => {
-    this.hooks.onHover?.(null, e.clientX, e.clientY);
+    if (this.pointers.size === 0) this.hooks.onHover?.(null, e.clientX, e.clientY);
   };
+
+  // --- pinch (two-finger zoom + pan) ----------------------------------------
+
+  /** Capture the baseline finger spread + midpoint when the 2nd finger lands. */
+  private beginPinch(): void {
+    const pts = [...this.pointers.values()];
+    if (pts.length < 2) return;
+    const [a, b] = pts;
+    this.pinchDist = Math.hypot(a!.x - b!.x, a!.y - b!.y) || 1;
+    this.pinchMidX = (a!.x + b!.x) / 2;
+    this.pinchMidY = (a!.y + b!.y) / 2;
+  }
+
+  /** Zoom by the change in finger spread and follow the midpoint (two-finger pan). */
+  private updatePinch(): void {
+    const pts = [...this.pointers.values()];
+    if (pts.length < 2) return;
+    const [a, b] = pts;
+    const dist = Math.hypot(a!.x - b!.x, a!.y - b!.y) || 1;
+    const midX = (a!.x + b!.x) / 2;
+    const midY = (a!.y + b!.y) / 2;
+    this.view.zoomAt(midX, midY, dist / this.pinchDist);
+    this.view.panBy(midX - this.pinchMidX, midY - this.pinchMidY);
+    this.pinchDist = dist;
+    this.pinchMidX = midX;
+    this.pinchMidY = midY;
+    this.dirty = true;
+  }
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();

@@ -44,6 +44,14 @@ export const fr: Catalog = {
   "canvas.feedback.rateLimited": "Doucement — réessaie dans un instant",
   "canvas.feedback.signInRequired": "Connecte-toi avec Twitch pour poser des pixels",
   "canvas.feedback.error": "Impossible de poser ce pixel — réessaie",
+  "canvas.feedback.capReached": "Jauge pleine ({max}) — valide ou retire une case",
+
+  // Pose en lot : modèle « sélection → validation » (FEN-113)
+  "canvas.draw": "Dessiner",
+  "canvas.validate": "Valider {count}",
+  "canvas.cancel": "Annuler",
+  "canvas.batchCount": "{count}/{max} sélectionnées",
+  "canvas.batchHint": "Touche une case pour sélectionner, puis Valider",
 
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profil introuvable",
