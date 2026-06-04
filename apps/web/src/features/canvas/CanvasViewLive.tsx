@@ -7,10 +7,12 @@
  * Responsibilities:
  *   - resolve the slug → Convex canvas id (`canvases.getCanvasBySlug`; the bare
  *     `/ws` route maps to the `"default"` canvas, mirroring the gateway);
- *   - gate on the Better Auth session — `getMyTierProgress`/`claimTier` are
- *     auth-gated server-side, so we pass `canvasId = null` until signed in, which
- *     makes the live source degrade to inert (no progression UI for anonymous
- *     viewers, claims no-op);
+ *   - gate on Convex's confirmed auth state (`useConvexAuth`) — `getMyTierProgress`/
+ *     `claimTier` are auth-gated server-side, so we pass `canvasId = null` until the
+ *     Convex backend has validated the JWT, which makes the live source degrade to
+ *     inert (no progression UI for anonymous viewers, claims no-op). Gating on the
+ *     raw Better Auth session instead raced the token handshake and blanked the
+ *     page after the OAuth redirect (FEN-182);
  *   - own the Convex hooks (`useQuery`/`useAction`) and feed the pure
  *     {@link createLiveTierSource} bridge, returning a referentially STABLE source
  *     so CanvasView subscribes exactly once.
@@ -20,9 +22,8 @@
  * of generated Convex codegen.
  */
 import { useEffect, useRef } from "react";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useConvexAuth, useQuery } from "convex/react";
 import { makeFunctionReference } from "convex/server";
-import { authClient } from "../../auth/auth-client";
 import { CanvasView } from "./CanvasView.js";
 import {
   createLiveTierSource,
@@ -95,13 +96,24 @@ export interface CanvasViewLiveProps {
 }
 
 export function CanvasViewLive({ slug = null }: CanvasViewLiveProps): React.ReactElement {
-  const { data: session } = authClient.useSession();
-  const authed = session != null;
+  // Gate the auth-only progression query on Convex's OWN auth state, not on the
+  // Better Auth session (FEN-182). After the Twitch OAuth redirect, Better Auth's
+  // `useSession()` flips to authenticated ~1s before the Convex client has fetched
+  // its JWT and had the backend confirm it. `getMyTierProgress` calls
+  // `requireUserId` server-side, so firing it during that window threw
+  // "unauthenticated"; with no error boundary that synchronous `useQuery` throw
+  // unmounted the whole tree → white page (matching "renders ~1s then white", also
+  // on reload). `useConvexAuth().isAuthenticated` is true only once the Convex
+  // backend has validated the token (see ConvexProviderWithAuth), so the query can
+  // never run unauthenticated. The ErrorBoundary at the app root is the matching
+  // safety net for any other transient render throw.
+  const { isAuthenticated: convexAuthed } = useConvexAuth();
 
   // Public query — resolves for anonymous viewers too, but we only arm the live
-  // tier source once authed (the progression queries require identity server-side).
+  // tier source once Convex itself is authed (the progression queries require
+  // identity server-side).
   const canvas = useQuery(getCanvasBySlugRef, { slug: slug ?? DEFAULT_CANVAS_SLUG });
-  const canvasId = authed && canvas ? canvas._id : null;
+  const canvasId = convexAuthed && canvas ? canvas._id : null;
 
   const tierSource = useLiveTierSource(canvasId);
 
