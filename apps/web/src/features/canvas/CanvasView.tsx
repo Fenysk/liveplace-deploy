@@ -18,20 +18,49 @@
  * Every user string flows through `@canvas/i18n` so the UI is FR/EN in place.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "convex/react";
+import { makeFunctionReference } from "convex/server";
 import { useTranslate } from "@canvas/i18n/react";
 import type { MessageKey } from "@canvas/i18n";
 import type { GaugeState } from "@canvas/protocol";
 import { AuthButton } from "../../auth/AuthButton.js";
+import { authClient } from "../../auth/auth-client.js";
 import { LanguageSwitcher } from "@canvas/i18n/react";
 import { CanvasRenderer, PALETTE_HEX } from "./renderer.js";
 import { CanvasNetClient, type ConnectionStatus } from "./net.js";
 import { OptimisticPlacement, type PlacementFeedback } from "./placement.js";
 import { BatchSelection, EMPTY_COLOR } from "./selection.js";
+import { derivePlaceState, type CanPlaceReason, type ConnectionState } from "./placeState.js";
 import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
 const DEFAULT_COLOR = 5; // red — a visible default pose colour
 const TOAST_MS = 2600;
+
+/**
+ * Convex queries referenced by name (`module:function`) — decoupled from the
+ * generated api, the same pattern GalleryPage uses. They feed the unified
+ * "puis-je poser ?" indicator (Lot E, [FEN-117]):
+ *   - `getCanvasBySlug` → the canvas doc (status + event window) and its id
+ *   - `canPlace` → the placement permission contract `{ allowed, reason? }`
+ * Both are skipped (no network) when there is no slug to resolve.
+ */
+const getCanvasBySlugRef = makeFunctionReference<
+  "query",
+  { slug: string },
+  { _id: string; status: string; eventStartAt: number | null; eventEndAt: number | null } | null
+>("canvases:getCanvasBySlug");
+
+const canPlaceRef = makeFunctionReference<
+  "query",
+  { canvasId: string },
+  { allowed: boolean; reason?: CanPlaceReason }
+>("canvases:canPlace");
+
+/** Map the WS transport status onto the state machine's connection vocabulary. */
+function toConnectionState(status: ConnectionStatus): ConnectionState {
+  return status === "open" ? "open" : status === "connecting" ? "connecting" : "offline";
+}
 
 interface ToastState {
   kind: PlacementFeedback["kind"] | "cap";
@@ -52,6 +81,11 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const placementRef = useRef<OptimisticPlacement | null>(null);
   const selectionRef = useRef<BatchSelection>(new BatchSelection(0));
   const hoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Latest unified place-state, mirrored into refs so the bound-once renderer
+  // tap callback can prevent staging BEFORE the click when placement is blocked
+  // (Lot E: "prévenir avant le clic", never an after-the-fact surprise).
+  const canPlaceNowRef = useRef(false);
+  const blockedMsgRef = useRef<MessageKey>("canvas.state.loading");
 
   // current tool, mirrored into refs so the renderer's tap callback (bound once)
   // always reads the latest value without re-binding.
@@ -75,6 +109,23 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const [selVersion, setSelVersion] = useState(0); // bumped on every batch change
   const [, setTick] = useState(0); // drives the per-second cooldown countdown
 
+  // Sticky ban learned from a WS `banned` error — lets the unified indicator
+  // (Lot E) keep showing "banned" pre-click after the first refusal, until the
+  // backend exposes bans through `canPlace` (documented gap, FEN-117).
+  const [bannedHint, setBannedHint] = useState(false);
+
+  // Unified "puis-je poser ?" inputs (Lot E, FEN-117):
+  //   - the session (anonymous visitors can watch but not place)
+  //   - the canvas doc (status + event window) and its permission contract
+  const { data: session } = authClient.useSession();
+  const authenticated = !!session;
+  const canvasDoc = useQuery(getCanvasBySlugRef, slug ? { slug } : "skip");
+  const canvasId = canvasDoc?._id ?? null;
+  const permissionResult = useQuery(canPlaceRef, canvasId ? { canvasId } : "skip");
+  // `useQuery` returns undefined while loading; with no slug there is nothing to
+  // resolve, so permission stays unknown and the indicator leans on auth/gauge.
+  const permission = slug ? permissionResult : undefined;
+
   /** Push the staged batch + hovered cell to the renderer and re-render the HUD. */
   const syncOverlay = useCallback(() => {
     rendererRef.current?.setOverlay(selectionRef.current.entries(), hoverRef.current);
@@ -88,6 +139,14 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   // Stage / toggle / recolor a cell with the current tool (the batch gesture).
   const stageCell = useCallback(
     (x: number, y: number) => {
+      // Prevent before the click: if the unified state says we can't place, show
+      // the reason instead of staging a doomed cell (Lot E acceptance — no
+      // "click to discover you can't"). Recoloring/deselecting an already-staged
+      // cell never grows the batch, so let those through.
+      if (!canPlaceNowRef.current && !selectionRef.current.has(x, y)) {
+        showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
+        return;
+      }
       const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
       const r = selectionRef.current.apply(x, y, c);
       if (r.kind === "cap") {
@@ -104,6 +163,12 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const validate = useCallback(() => {
     const placement = placementRef.current;
     if (!placement) return;
+    // Defensive: the button is disabled when blocked, but never commit a doomed
+    // batch — surface the reason and keep the staged cells (Lot E + FEN-113).
+    if (!canPlaceNowRef.current) {
+      showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
+      return;
+    }
     const cells = selectionRef.current.take();
     for (const cell of cells) {
       const msg = placement.place(cell.x, cell.y, cell.color);
@@ -111,7 +176,7 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     }
     setArmed(null);
     syncOverlay();
-  }, [syncOverlay]);
+  }, [showToast, syncOverlay]);
 
   // Annuler: empty the batch and leave draw mode.
   const cancel = useCallback(() => {
@@ -151,12 +216,19 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       el,
       {
         onTap: (x, y, pointerType) => {
-          // Desktop (mouse/pen) or already in draw mode → stage directly.
+          // Desktop (mouse/pen) or already in draw mode → stage directly (stageCell
+          // prevents staging when blocked and explains why).
           if (pointerType === "mouse" || pointerType === "pen" || drawingRef.current) {
             stageCell(x, y);
             return;
           }
-          // Mobile first touch → reveal "Dessiner" for this cell (no accidental pose).
+          // Mobile first touch: if placement is blocked, surface the reason rather
+          // than revealing "Dessiner" (prévenir avant le clic, Lot E).
+          if (!canPlaceNowRef.current) {
+            showToast({ kind: "rejected", messageKey: blockedMsgRef.current });
+            return;
+          }
+          // Otherwise reveal "Dessiner" for this cell (no accidental pose).
           setArmed({ x, y });
         },
         onHover: (cell) => {
@@ -180,7 +252,10 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
               surface: renderer,
               onGauge: setGauge,
               onFeedback: (f) => {
-                if (f.kind === "banned") selectionRef.current.setLocked(true);
+                if (f.kind === "banned") {
+                  selectionRef.current.setLocked(true);
+                  setBannedHint(true); // sticky → unified indicator shows "banned" pre-click
+                }
                 showToast(f);
               },
             });
@@ -212,8 +287,22 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
     };
   }, [slug, showToast, stageCell]);
 
-  const onCooldown = gauge !== null && gauge.charges <= 0 && gauge.cooldownUntil > Date.now();
-  const cooldownSeconds = onCooldown ? Math.max(0, Math.ceil((gauge!.cooldownUntil - Date.now()) / 1000)) : 0;
+  // The single unified "puis-je poser ?" answer (Lot E, FEN-117): one indicator,
+  // yes/no + why + when, recomputed each render (the per-second tick re-renders
+  // so the cooldown countdown stays live). The actual colour/icon is delegated
+  // to the UI phase — here we render the text label only (C6).
+  const placeState = derivePlaceState({
+    connection: toConnectionState(status),
+    authenticated,
+    permission,
+    eventStartAt: canvasDoc?.eventStartAt ?? null,
+    eventEndAt: canvasDoc?.eventEndAt ?? null,
+    gauge,
+    bannedHint,
+    now: Date.now(),
+  });
+  canPlaceNowRef.current = placeState.canPlace;
+  blockedMsgRef.current = placeState.messageKey;
 
   const sel = selectionRef.current;
   const count = sel.count; // re-read each render; selVersion forces the refresh
@@ -235,15 +324,23 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       <div className="lp-hud">
         <h1>{t("app.title")}</h1>
 
-        <p className={`lp-gauge${onCooldown ? " is-empty" : ""}`}>
-          {gauge === null
-            ? t("canvas.connecting")
-            : onCooldown
-              ? t("canvas.cooldown", { seconds: cooldownSeconds })
-              : count > 0
-                ? t("canvas.batchCount", { count, max: sel.capacity })
-                : t("canvas.gauge", { current: gauge.charges, max: gauge.max })}
+        {/* Rang 1 — unified "puis-je poser ?" indicator (Lot E). One line that
+            answers yes/no + why + when, with a text label for every state
+            (C6). The `data-state` exposes the machine state for the UI phase to
+            style; no colour decision is made here. */}
+        <p
+          className={`lp-state${placeState.canPlace ? " is-ready" : " is-blocked"}`}
+          data-state={placeState.kind}
+          role="status"
+          aria-live="polite"
+        >
+          {t(placeState.messageKey as MessageKey, placeState.params)}
         </p>
+
+        {/* Rang 2 — the staging counter, shown only while a batch is in progress. */}
+        {count > 0 && (
+          <p className="lp-gauge">{t("canvas.batchCount", { count, max: sel.capacity })}</p>
+        )}
 
         <div className="lp-palette" role="group" aria-label={t("canvas.palette")}>
           {PALETTE_HEX.map((hex, i) => (
@@ -285,7 +382,12 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
           {/* Valider / Annuler appear once the batch is non-empty. */}
           {count > 0 && (
             <>
-              <button type="button" className="lp-btn is-primary" disabled={sel.isLocked} onClick={validate}>
+              <button
+                type="button"
+                className="lp-btn is-primary"
+                disabled={sel.isLocked || !placeState.canPlace}
+                onClick={validate}
+              >
                 {t("canvas.validate", { count })}
               </button>
               <button type="button" className="lp-btn" onClick={cancel}>
