@@ -17,6 +17,7 @@ import {
   removalCells,
   groupByCell,
   sortPlans,
+  authorOfTop,
   type PlacementRow,
 } from "./moderation.ts";
 
@@ -91,6 +92,30 @@ test("groupByCell: sorts each cell's stack ascending by version", () => {
     groups.get("0,0")!.map((r) => r.version),
     [10, 20, 30],
   );
+});
+
+// ── authorOfTop (FEN-159): ban target from a cell's top placement ───────────
+
+test("authorOfTop: returns the visible author of the top placement", () => {
+  // The query feeds the highest-version row (by_canvas_cell desc).
+  assert.deepEqual(authorOfTop(p(4, 7, 5, 20, "bob")), {
+    userId: "bob",
+    color: 5,
+    version: 20,
+  });
+});
+
+test("authorOfTop: null for an empty cell (no placement)", () => {
+  assert.equal(authorOfTop(null), null);
+  assert.equal(authorOfTop(undefined), null);
+});
+
+test("authorOfTop: null when the top is erased (color 0 shows nothing)", () => {
+  assert.equal(authorOfTop(p(1, 1, 0, 99, "bob")), null);
+});
+
+test("authorOfTop: null when the top is anonymous (no userId to ban)", () => {
+  assert.equal(authorOfTop(p(1, 1, 5, 99)), null);
 });
 
 test("sortPlans: deterministic row-major (y then x)", () => {

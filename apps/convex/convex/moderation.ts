@@ -28,7 +28,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireUserId } from "./lib/identity";
-import { planDelete, planWipe, removalCells } from "./lib/moderation";
+import { authorOfTop, planDelete, planWipe, removalCells } from "./lib/moderation";
 import type { PlacementRow, RemovalPlan } from "./lib/moderation";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -741,5 +741,65 @@ export const listAuditLog = query({
       .withIndex("by_canvas_ts", (q) => q.eq("canvasId", a.canvasId))
       .order("desc")
       .take(limit);
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Crisis "ban an author" surface (FEN-159, backs FEN-157 §2 + §4).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * FEN-159 — resolve the current visible author at a cell so the crisis ban flow
+ * can turn a pointed-at pixel into a `banAndWipe({ canvasId, targetUserId })`.
+ * Reads only the top-of-stack placement via `placements.by_canvas_cell` (highest
+ * `version`, single indexed row — no whole-canvas scan), then `authorOfTop`
+ * applies the ban-target rules: `null` for an empty / currently-erased / anonymous
+ * top, otherwise `{ userId, displayName? }` (display name joined from `profiles`).
+ * Mod-authorised via `assertCanModerate` (owner / active mod only). Note the
+ * report reflects the durable log; a not-yet-flushed live placement can lag, but
+ * `banAndWipe` force-flushes before it acts, so the eventual wipe stays correct.
+ */
+export const authorAt = query({
+  args: { canvasId: v.id("canvases"), x: v.number(), y: v.number() },
+  returns: v.union(
+    v.object({ userId: v.string(), displayName: v.optional(v.string()) }),
+    v.null(),
+  ),
+  handler: async (ctx, a) => {
+    const actorUserId = await requireUserId(ctx);
+    await assertCanModerate(ctx, a.canvasId, actorUserId);
+    const top = await ctx.db
+      .query("placements")
+      .withIndex("by_canvas_cell", (q) =>
+        q.eq("canvasId", a.canvasId).eq("x", a.x).eq("y", a.y),
+      )
+      .order("desc")
+      .first();
+    const author = authorOfTop(top);
+    if (!author) return null;
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_authUserId", (q) => q.eq("authUserId", author.userId))
+      .unique();
+    return { userId: author.userId, displayName: profile?.displayName };
+  },
+});
+
+/**
+ * FEN-159 (nice-to-have, FEN-157 §4) — ban blast-radius preview: how many of
+ * `targetUserId`'s pixels `banAndWipe` would remove, computed by `planWipe` over
+ * the durable log with NO mutation, so the confirm can show "N pixels will be
+ * removed". This is an estimate against the last-flushed `placements` log (no
+ * forced flush — preview must stay side-effect-free); the actual `banAndWipe`
+ * flushes first, so the committed count may differ slightly. Mod-authorised.
+ */
+export const banBlastRadius = query({
+  args: { canvasId: v.id("canvases"), targetUserId: v.string() },
+  returns: v.object({ pixels: v.number() }),
+  handler: async (ctx, a) => {
+    const actorUserId = await requireUserId(ctx);
+    await assertCanModerate(ctx, a.canvasId, actorUserId);
+    const plans = planWipe(await loadPlacements(ctx, a.canvasId), a.targetUserId);
+    return { pixels: plans.length };
   },
 });

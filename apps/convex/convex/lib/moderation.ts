@@ -159,6 +159,23 @@ export function removalCells(plans: ReadonlyArray<RemovalPlan>): ModerationCell[
   return plans.map((p) => ({ x: p.x, y: p.y, color: p.underneathColor }));
 }
 
+/**
+ * Crisis ban surface (FEN-159 / FEN-157 §2): resolve a *ban target* from the
+ * top-of-stack placement at a cell. Returns the visible author, or `null` when
+ * there is no ban target there — empty cell, an erased top (`color === 0`, shows
+ * nothing), or an anonymous top (no `userId`, nobody to ban). This deliberately
+ * mirrors `planWipe`'s skip rules (erased / non-author tops are skipped), so the
+ * cell `authorAt` reports is exactly a cell the ensuing wipe would act on; we
+ * never hand a mod a target whose pixel isn't actually showing. The caller feeds
+ * the single indexed top row (highest `version` via `by_canvas_cell`).
+ */
+export function authorOfTop(
+  top: PlacementRow | null | undefined,
+): { userId: string; color: number; version: number } | null {
+  if (!top || top.color === 0 || top.userId === undefined) return null;
+  return { userId: top.userId, color: top.color, version: top.version };
+}
+
 /** Deterministic ordering: row-major (y, then x). */
 export function sortPlans<T extends { x: number; y: number }>(plans: T[]): T[] {
   return plans.sort((a, b) => (a.y - b.y) || (a.x - b.x));
