@@ -30,6 +30,7 @@ import {
   type StreamerCanvas,
 } from "./studioView.js";
 import { CrisisPanel } from "./CrisisPanel.js";
+import { CrisisController } from "./CrisisController.js";
 import type { CrisisActionId } from "./crisisView.js";
 
 /** Raw `canvases:listMyCanvases` row (the subset the dashboard renders). */
@@ -110,6 +111,9 @@ export function DashboardPage(): React.ReactElement {
   // hint flag (D9 "vu mémorisé").
   const [pendingCrisis, setPendingCrisis] = useState<CrisisActionId | null>(null);
   const [freezeHintSeen, setFreezeHintSeen] = useState(readFreezeHintSeen);
+  // Which crisis selection surface is open (ban / wipe), or null. Driven by the
+  // CrisisPanel's grouped tools; the CrisisController owns the surface + dispatch.
+  const [crisisMode, setCrisisMode] = useState<"ban" | "wipe" | null>(null);
 
   const view = buildDashboardView(
     docs?.map(toStreamerCanvas),
@@ -126,6 +130,7 @@ export function DashboardPage(): React.ReactElement {
    */
   function crisisFreeze(canvasId: string, frozen: boolean): void {
     setPendingCrisis(frozen ? "freeze" : "reopen");
+    if (!frozen) setCrisisMode(null); // reopening closes any open ban/wipe surface
     if (frozen && !freezeHintSeen) {
       setFreezeHintSeen(true);
       try {
@@ -142,17 +147,14 @@ export function DashboardPage(): React.ReactElement {
       .finally(() => setPendingCrisis(null));
   }
 
-  // Grouped triage tools (ban / wipe). Both need a TARGET — which author, which
-  // region — and that selection surface is the delegated visual piece for this
-  // lot (UI phase / [FEN-153]). Here the buttons exist and are findable (the lot's
-  // < 10 s acceptance); clicking announces the next step so the streamer knows to
-  // pick the target on the canvas. The dispatch to `moderation.banAndWipe` /
-  // `deletePixels` is wired when that selection lands.
+  // Grouped triage tools (ban / wipe). Each opens its on-canvas selection surface
+  // (FEN-160): the CrisisController renders the reticle/marquee, resolves the
+  // target, confirms the blast radius, and dispatches `banAndWipe`/`deletePixels`.
   function promptBan(): void {
-    setAnnounce(t("studio.crisis.banPrompt"));
+    setCrisisMode("ban");
   }
   function promptWipe(): void {
-    setAnnounce(t("studio.crisis.wipePrompt"));
+    setCrisisMode("wipe");
   }
 
   /**
@@ -209,9 +211,11 @@ export function DashboardPage(): React.ReactElement {
               active={view.active}
               pendingCrisis={pendingCrisis}
               freezeHintSeen={freezeHintSeen}
+              crisisMode={crisisMode}
               onToggleFreeze={(frozen) => crisisFreeze(view.active!.canvas.id, frozen)}
               onBan={promptBan}
               onWipe={promptWipe}
+              onExitCrisis={() => setCrisisMode(null)}
             />
           ) : (
             // Has archives but nothing active — neutral copy + CTA, NOT the
@@ -249,17 +253,21 @@ function ActiveCard({
   active,
   pendingCrisis,
   freezeHintSeen,
+  crisisMode,
   onToggleFreeze,
   onBan,
   onWipe,
+  onExitCrisis,
 }: {
   active: ActiveCanvasView;
   pendingCrisis: CrisisActionId | null;
   freezeHintSeen: boolean;
+  crisisMode: "ban" | "wipe" | null;
   /** `frozen` true → emergency-freeze; false → reopen. */
   onToggleFreeze: (frozen: boolean) => void;
   onBan: () => void;
   onWipe: () => void;
+  onExitCrisis: () => void;
 }): React.ReactElement {
   const t = useTranslate();
   const { canvas, statusKey, visibilityKey } = active;
@@ -303,6 +311,19 @@ function ActiveCard({
         onBan={onBan}
         onWipe={onWipe}
       />
+
+      {/* Frozen-phase crisis triage: the on-canvas ban/wipe selection surfaces +
+          the recent-actions undo list (FEN-160). Mounted only once frozen, when
+          the grouped tools are reachable (Flow S3). */}
+      {!canvas.placementOpen && (
+        <CrisisController
+          canvasId={canvas.id}
+          slug={canvas.slug}
+          bounds={{ width: canvas.width, height: canvas.height }}
+          mode={crisisMode}
+          onExit={onExitCrisis}
+        />
+      )}
     </article>
   );
 }
