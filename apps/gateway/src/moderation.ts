@@ -30,6 +30,7 @@ import {
   flushRequestChannel,
   type ModerationCell,
 } from "@canvas/redis-scripts";
+import { MODERATION_EVENT_CHANNEL, encodeModerationEvent } from "./schema";
 
 // `flushRequestChannel` is the shared per-canvas nudge channel, now owned by
 // @canvas/redis-scripts (alongside DELTA_CHANNEL) so the gateway publisher and
@@ -165,6 +166,22 @@ export class ModerationService {
       nowMs: this.now(),
     });
     const r = parseModerateResult(await this.redis.evalModerate(keys, argv));
+    // Action-level fan-out (FEN-156): announce the bulk overwrite so every gateway
+    // instance can push a `moderationEvent` frame to its viewers, giving the wipe
+    // an attribution the per-pixel deltas lack. Only when something was actually
+    // written — a 0-applied call (malformed batch from Convex) changed nothing, so
+    // there is no event to surface. Best-effort: a publish hiccup must not fail the
+    // moderation HTTP call (the durable record + deltas already landed).
+    if (r.applied > 0) {
+      try {
+        await this.redis.publish(
+          MODERATION_EVENT_CHANNEL,
+          encodeModerationEvent({ canvasId: this.cfg.canvasId, version: r.lastSeq, cells: r.applied }),
+        );
+      } catch (err) {
+        console.warn(`[gateway] moderation-event publish failed: ${(err as Error).message}`);
+      }
+    }
     return { applied: r.applied, version: r.lastSeq };
   }
 

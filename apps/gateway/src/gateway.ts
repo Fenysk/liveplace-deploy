@@ -25,7 +25,7 @@ import {
   type ServerMessage,
 } from "@canvas/protocol";
 import { DELTA_CHANNEL, DEFAULT_CANVAS_ID, type GaugeParams } from "@canvas/redis-scripts";
-import { parseDeltaMessage } from "./schema";
+import { parseDeltaMessage, parseModerationEvent, MODERATION_EVENT_CHANNEL } from "./schema";
 import type { GatewayConfig } from "./config";
 import { ModerationService, IoredisModerationRedis, ModerationRequestError, parseCells } from "./moderation";
 import { createAuthenticator, AuthError, type AuthedUser, type SocketAuthenticator } from "./auth";
@@ -401,16 +401,39 @@ export class Gateway {
   private async subscribeDeltas(): Promise<void> {
     const { sub } = this.redis;
     sub.on("message", (channel, payload) => {
-      if (channel !== DELTA_CHANNEL) return;
-      const d = parseDeltaMessage(payload);
-      if (!d) return;
-      this.coalescer.add(d);
-      this.ring.push(d);
+      if (channel === DELTA_CHANNEL) {
+        const d = parseDeltaMessage(payload);
+        if (!d) return;
+        this.coalescer.add(d);
+        this.ring.push(d);
+        return;
+      }
+      if (channel === MODERATION_EVENT_CHANNEL) {
+        this.onModerationEvent(payload);
+        return;
+      }
     });
     // A reconnect may have dropped writes → the ring could have a gap. Reset it
     // so resync falls back to a snapshot rather than serving an incomplete tail.
     sub.on("ready", () => this.ring.reset());
     await sub.subscribe(DELTA_CHANNEL);
+    // FEN-156: action-level moderation events fan out cross-instance just like
+    // deltas, so a viewer on ANY instance gets the wipe attribution.
+    await sub.subscribe(MODERATION_EVENT_CHANNEL);
+  }
+
+  /**
+   * Re-broadcast a fanned-out moderation event (FEN-156) as a `moderationEvent`
+   * frame to this instance's viewers. Filtered to this gateway's canvas so a
+   * future multi-canvas deployment only notifies the affected viewers; for the
+   * single-canvas MVP it always matches. A malformed payload is dropped (parse →
+   * null), never crashing the subscription.
+   */
+  private onModerationEvent(payload: string): void {
+    const ev = parseModerationEvent(payload);
+    if (!ev) return;
+    if (ev.canvasId !== (this.cfg.canvasId ?? DEFAULT_CANVAS_ID)) return;
+    this.broadcastJson({ t: "moderationEvent", version: ev.version, cells: ev.cells });
   }
 
   /** Emit one coalesced delta frame to every client (the CA1 fan-out). */

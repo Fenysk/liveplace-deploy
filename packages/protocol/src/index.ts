@@ -172,6 +172,23 @@ export type ServerMessage =
    */
   | { t: "resyncRequired" }
   /**
+   * A server-initiated bulk overwrite just changed the fresco for everyone — a
+   * moderation **wipe / ban-and-wipe** (the cells also arrive as ordinary deltas;
+   * this frame is the *attribution* the deltas lack). It exists so a watching
+   * client can tell "a moderation event happened here" apart from a reconnect
+   * `resyncRequired` (a NETWORK event), which would otherwise be the only signal a
+   * mass change occurred and reads as anxiety, not explanation (UX Lot I / FEN-121).
+   * `version` is the last write seq of the action (monotonic per canvas); `cells`
+   * is how many pixels it touched — both informational. A freeze/unfreeze is NOT
+   * announced here: it is already observable via `canPlace`→`placement_closed`.
+   *
+   * ADDITIVE & non-breaking: a client that does not know `t === "moderationEvent"`
+   * ignores it (same as any unknown frame) and still applies the deltas, so
+   * PROTOCOL_VERSION stays 1 — same evolution rule as the F7 per-frame seq, which
+   * was added before any client consumed it. Server → client only.
+   */
+  | { t: "moderationEvent"; version: number; cells: number }
+  /**
    * A rejected placement (→ client rollback) or a transport-level error. `cid`
    * echoes the rejected `place` op id (FEN-63) when the error pertains to a
    * placement, so an optimistic client can roll back exactly the pending pixel it
