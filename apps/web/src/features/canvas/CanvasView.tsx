@@ -42,6 +42,15 @@ import { gatewayWsUrl } from "./gateway.js";
 import "./canvas.css";
 
 const DEFAULT_COLOR = 5; // red — a visible default pose colour
+/**
+ * The default canvas slug — mirrors `DEFAULT_CANVAS_SLUG` in apps/convex (ADR-0003)
+ * and `CanvasViewLive`. The bare home/`/ws` route carries `slug = null`; the
+ * gateway drains it under this slug, and the Convex `canvases` row is seeded under
+ * it (`ensureDefaultCanvas`). Resolving it here is what lets the placement
+ * permission (`canPlace`) actually load on the default canvas instead of staying
+ * `undefined` forever (FEN-184).
+ */
+const DEFAULT_CANVAS_SLUG = "default";
 const TOAST_MS = 2600;
 const IDLE_MS = 7000; // hesitation: inactive a few seconds ⇒ offer help (ux-spec §D9)
 
@@ -51,7 +60,9 @@ const IDLE_MS = 7000; // hesitation: inactive a few seconds ⇒ offer help (ux-s
  * "puis-je poser ?" indicator (Lot E, [FEN-117]):
  *   - `getCanvasBySlug` → the canvas doc (status + event window) and its id
  *   - `canPlace` → the placement permission contract `{ allowed, reason? }`
- * Both are skipped (no network) when there is no slug to resolve.
+ * A null slug resolves the seeded `default` canvas (the home/`/ws` target), so
+ * the permission contract loads there too; `canPlace` is skipped only until the
+ * canvas doc resolves to an id.
  */
 const getCanvasBySlugRef = makeFunctionReference<
   "query",
@@ -208,12 +219,17 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   // gate agree on auth. The canvas doc (status + event window) and its
   // permission contract come from Convex, skipped when there is no slug.
   const authenticated = !!session;
-  const canvasDoc = useQuery(getCanvasBySlugRef, slug ? { slug } : "skip");
+  // The bare home/`/ws` route has `slug = null` but still targets a real canvas
+  // (the seeded `default`). Resolve that slug here — skipping the queries for a
+  // null slug left `permission` permanently `undefined`, which `derivePlaceState`
+  // reads as the indefinite "loading" state ("La fresque arrive…"), blocking
+  // drawing for a logged-in viewer on the default canvas (FEN-184).
+  const effectiveSlug = slug ?? DEFAULT_CANVAS_SLUG;
+  const canvasDoc = useQuery(getCanvasBySlugRef, { slug: effectiveSlug });
   const canvasId = canvasDoc?._id ?? null;
-  const permissionResult = useQuery(canPlaceRef, canvasId ? { canvasId } : "skip");
-  // `useQuery` returns undefined while loading; with no slug there is nothing to
-  // resolve, so permission stays unknown and the indicator leans on auth/gauge.
-  const permission = slug ? permissionResult : undefined;
+  // `useQuery` returns undefined while loading. Once the canvas resolves, the
+  // permission contract loads and the unified indicator leaves "loading".
+  const permission = useQuery(canPlaceRef, canvasId ? { canvasId } : "skip");
 
   /** Push the staged batch + hovered cell to the renderer and re-render the HUD. */
   const syncOverlay = useCallback(() => {
