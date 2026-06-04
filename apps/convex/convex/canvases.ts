@@ -29,6 +29,7 @@ import {
   type PlacementDenyReason,
 } from "./lib/canvasRules";
 import { planGalleryFieldsPatch } from "./lib/gallery";
+import { isUserBanned } from "./moderation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers.
@@ -517,6 +518,7 @@ export const canPlace = query({
     reason: v.optional(
       v.union(
         v.literal("canvas_archived"),
+        v.literal("banned"),
         v.literal("placement_closed"),
         v.literal("outside_event_window"),
         v.literal("canvas_not_found"),
@@ -530,8 +532,13 @@ export const canPlace = query({
     const canvas = await ctx.db.get(args.canvasId);
     if (!canvas) return { allowed: false, reason: "canvas_not_found" };
     const userId = await optionalUserId(ctx);
+    const isOwner = userId !== null && userId === canvas.ownerId;
+    // F8 ban gate (FEN-132): a banned user is refused before the click. Owners
+    // can't be banned from their own canvas, so skip the lookup for them.
+    const isBanned = userId !== null && !isOwner && (await isUserBanned(ctx, canvas._id, userId));
     const decision: PlacementDecision = evaluatePlacement(toShape(canvas), {
-      isOwner: userId !== null && userId === canvas.ownerId,
+      isOwner,
+      isBanned,
       now: Date.now(),
     });
     return decision;

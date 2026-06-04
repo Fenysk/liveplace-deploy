@@ -272,6 +272,7 @@ export function assertResizeAllowed(canvas: CanvasShape, width: number, height: 
 
 export type PlacementDenyReason =
   | "canvas_archived"
+  | "banned"
   | "placement_closed"
   | "outside_event_window";
 
@@ -283,21 +284,33 @@ export interface PlacementDecision {
 export interface PlacementContext {
   /** Is the requesting user the canvas owner? Owner may test outside the window. */
   isOwner: boolean;
+  /**
+   * Is the requesting user actively banned on this canvas (F8 moderation)?
+   * Resolved by the caller from the durable `bans` log (`moderation.isUserBanned`)
+   * — the pure rule only orders it. Defaults to false (e.g. the gateway path that
+   * still gates bans separately) so existing callers are unaffected.
+   */
+  isBanned?: boolean;
   /** Current epoch ms. */
   now: number;
 }
 
 /**
  * Decide whether a placement is allowed. Order of checks matters for a clear
- * client message: archive (hard, even for owner) → freeze → event window.
+ * client message: archive (hard, even for owner) → ban → freeze → event window.
  *
  *  - CA3: archived canvas refuses ALL placement, including the owner.
+ *  - F8/ban: a banned user is refused on this canvas (most relevant per-user
+ *    reason, so the unified client can prevent the very first click — FEN-132).
  *  - F8/freeze: placementOpen=false refuses everyone (emergency freeze).
  *  - CA4: outside the event window, non-owners are refused; the owner may test.
  */
 export function evaluatePlacement(canvas: CanvasShape, ctx: PlacementContext): PlacementDecision {
   if (canvas.status === "archived") {
     return { allowed: false, reason: "canvas_archived" };
+  }
+  if (ctx.isBanned) {
+    return { allowed: false, reason: "banned" };
   }
   if (!canvas.placementOpen) {
     return { allowed: false, reason: "placement_closed" };

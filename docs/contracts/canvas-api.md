@@ -50,13 +50,20 @@ WS gateway MUST consult it (directly or via the same `evaluatePlacement` rule)
 before minting a place ticket. Decision order (for a clear client reason):
 
 1. `canvas_archived` — archived canvases refuse **everyone, including the owner** (CA3).
-2. `placement_closed` — `placementOpen === false`, emergency freeze, refuses everyone.
-3. `outside_event_window` — outside `[eventStartAt, eventEndAt)`, **non-owners** are
+2. `banned` — the caller is actively banned on this canvas (F8 moderation). Resolved
+   from the durable `bans` log via `moderation.isUserBanned`; owners are never banned
+   on their own canvas so the lookup is skipped for them. Lets the unified client
+   prevent the **very first** click instead of only learning of the ban from the WS
+   `banned` error after a refused attempt (FEN-132).
+3. `placement_closed` — `placementOpen === false`, emergency freeze, refuses everyone.
+4. `outside_event_window` — outside `[eventStartAt, eventEndAt)`, **non-owners** are
    refused; the **owner may still test** (CA4).
-4. otherwise `{ allowed: true }`.
+5. otherwise `{ allowed: true }`.
 
-`evaluatePlacement(canvas, { isOwner, now })` in `lib/canvasRules.ts` is exported
-for reuse by the gateway so the rule is never duplicated.
+`evaluatePlacement(canvas, { isOwner, isBanned, now })` in `lib/canvasRules.ts` is
+exported for reuse by the gateway so the rule is never duplicated. `isBanned` is
+optional (defaults to `false`) — the gateway path that still gates bans via its own
+WS check is unaffected; `canPlace` resolves it from `bans` before calling the rule.
 
 ## Tests
 

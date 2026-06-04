@@ -52,6 +52,24 @@ async function assertCanModerate(
   throw new Error("forbidden: only the canvas owner or a moderator may moderate.");
 }
 
+/**
+ * Whether `userId` is actively banned on `canvasId`. The single durable ban
+ * lookup shared by the gateway-facing `isBanned` query and the `canPlace`
+ * placement gate (`canvases.ts`), so the two never drift. A ban row is a point
+ * record per `(canvasId, userId)`; only `active` rows deny.
+ */
+export async function isUserBanned(
+  ctx: QueryCtx,
+  canvasId: Id<"canvases">,
+  userId: string,
+): Promise<boolean> {
+  const ban = await ctx.db
+    .query("bans")
+    .withIndex("by_canvas_user", (q) => q.eq("canvasId", canvasId).eq("userId", userId))
+    .unique();
+  return !!ban && ban.active;
+}
+
 /** Palette size (colour count) — the `paletteSize` the hot-path needs. */
 async function paletteSizeOf(ctx: QueryCtx, canvas: Doc<"canvases">): Promise<number> {
   const palette = await ctx.db.get(canvas.paletteId);
@@ -682,13 +700,7 @@ export const syncTwitchMods = action({
 export const isBanned = query({
   args: { canvasId: v.id("canvases"), userId: v.string() },
   returns: v.boolean(),
-  handler: async (ctx, a) => {
-    const ban = await ctx.db
-      .query("bans")
-      .withIndex("by_canvas_user", (q) => q.eq("canvasId", a.canvasId).eq("userId", a.userId))
-      .unique();
-    return !!ban && ban.active;
-  },
+  handler: async (ctx, a) => isUserBanned(ctx, a.canvasId, a.userId),
 });
 
 /** Active bans on a canvas (owner/mod dashboard). */

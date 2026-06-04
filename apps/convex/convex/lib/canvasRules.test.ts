@@ -164,6 +164,39 @@ test("freeze — placementOpen=false refuses everyone (emergency freeze)", () =>
   assert.equal(evaluatePlacement(c, { isOwner: true, now: 0 }).reason, "placement_closed");
 });
 
+// ── F8 ban (FEN-132): a banned user is refused before the click ──────────────
+test("F8 — a banned user is refused with reason 'banned'", () => {
+  const open = canvas({ eventStartAt: null, eventEndAt: null });
+  // banned non-owner on an otherwise-placeable canvas → denied
+  assert.deepEqual(evaluatePlacement(open, { isOwner: false, isBanned: true, now: 0 }), {
+    allowed: false,
+    reason: "banned",
+  });
+  // not banned → allowed (default / explicit false both work)
+  assert.equal(evaluatePlacement(open, { isOwner: false, now: 0 }).allowed, true);
+  assert.equal(evaluatePlacement(open, { isOwner: false, isBanned: false, now: 0 }).allowed, true);
+});
+
+test("F8 — ban order: archive outranks ban; ban outranks freeze and window", () => {
+  // archive is the hardest state and wins even over a ban
+  const archived = canvas({ status: "archived" });
+  assert.equal(
+    evaluatePlacement(archived, { isOwner: false, isBanned: true, now: 0 }).reason,
+    "canvas_archived",
+  );
+  // ban is reported ahead of a freeze and an event-window miss (most relevant per-user)
+  const frozen = canvas({ placementOpen: false });
+  assert.equal(
+    evaluatePlacement(frozen, { isOwner: false, isBanned: true, now: 0 }).reason,
+    "banned",
+  );
+  const windowed = canvas({ eventStartAt: 1000, eventEndAt: 2000 });
+  assert.equal(
+    evaluatePlacement(windowed, { isOwner: false, isBanned: true, now: 500 }).reason,
+    "banned",
+  );
+});
+
 // ── CA4: outside the event window, viewers are refused, the owner may test ───
 test("CA4 — outside the event window viewer is refused, owner is allowed", () => {
   const c = canvas({ eventStartAt: 1000, eventEndAt: 2000 });
