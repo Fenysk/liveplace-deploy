@@ -44,10 +44,16 @@ export const en = {
   // yes/no + why + when, a text label for every state (C6, never colour alone).
   "canvas.state.loading": "Loading the canvas…",
   "canvas.state.ready": "You can place — {charges} pixels ready",
+  // Singular variant (charges === 1) — derivePlaceState picks the key (R2, FEN-138).
+  "canvas.state.ready.one": "You can place — 1 pixel ready",
   "canvas.state.cooldown": "Out of pixels — refills in {seconds}s",
   "canvas.state.signedOut": "Sign in with Twitch to place",
   "canvas.state.frozen": "Placing is paused",
+  // "notStarted" disambiguates the open day so the user can plan their return (R1,
+  // FEN-138): same-day keeps just the time; tomorrow/other carry the day too.
   "canvas.state.notStarted": "Opens at {time}",
+  "canvas.state.notStarted.tomorrow": "Opens tomorrow at {time}",
+  "canvas.state.notStarted.date": "Opens {date} at {time}",
   "canvas.state.ended": "This event has ended",
   "canvas.state.archived": "Finished canvas — view only",
   "canvas.state.banned": "You can no longer place on this canvas",

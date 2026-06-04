@@ -22,6 +22,7 @@ import {
   derivePlaceState,
   secondsUntil,
   defaultFormatTime,
+  defaultFormatWhen,
   type PlaceStateInput,
   type PlaceStateKind,
 } from "./placeState.ts";
@@ -141,6 +142,74 @@ test("notStarted vs ended are DISTINCT outcomes of the same backend reason", () 
   assert.notEqual(future.kind, past.kind);
 });
 
+// ── R1 (FEN-138): notStarted names the open DAY, not just the time ───────────
+
+/** outside_event_window with a future start, plus an injected day descriptor. */
+function notStarted(when: { day: "today" | "tomorrow" | "other"; time: string; date?: string }) {
+  return derivePlaceState(
+    base({
+      permission: { allowed: false, reason: "outside_event_window" },
+      eventStartAt: NOW + 60_000,
+      eventEndAt: NOW + 3_600_000,
+      formatWhen: () => when,
+    }),
+  );
+}
+
+test("notStarted (today): keeps the time-only label", () => {
+  const s = notStarted({ day: "today", time: "15:00" });
+  assert.equal(s.kind, "notStarted");
+  assert.equal(s.messageKey, "canvas.state.notStarted");
+  assert.deepEqual(s.params, { time: "15:00" });
+});
+
+test("notStarted (tomorrow): switches to the 'tomorrow' label", () => {
+  const s = notStarted({ day: "tomorrow", time: "09:00" });
+  assert.equal(s.kind, "notStarted");
+  assert.equal(s.messageKey, "canvas.state.notStarted.tomorrow");
+  assert.deepEqual(s.params, { time: "09:00" });
+});
+
+test("notStarted (further out): carries an unambiguous date + time", () => {
+  const s = notStarted({ day: "other", time: "09:00", date: "Jun 7" });
+  assert.equal(s.kind, "notStarted");
+  assert.equal(s.messageKey, "canvas.state.notStarted.date");
+  assert.deepEqual(s.params, { date: "Jun 7", time: "09:00" });
+});
+
+test("defaultFormatWhen: classifies today / tomorrow / further by LOCAL calendar day", () => {
+  // Built from local Date parts so the assertion is timezone-independent.
+  const noon = new Date(2026, 5, 7, 12, 0, 0).getTime(); // Sun 7 Jun 2026, local noon
+  const sameDay = new Date(2026, 5, 7, 18, 30, 0).getTime();
+  const nextDay = new Date(2026, 5, 8, 9, 0, 0).getTime();
+  const threeDays = new Date(2026, 5, 10, 9, 0, 0).getTime();
+
+  assert.equal(defaultFormatWhen(sameDay, noon).day, "today");
+  assert.equal(defaultFormatWhen(nextDay, noon).day, "tomorrow");
+  const far = defaultFormatWhen(threeDays, noon);
+  assert.equal(far.day, "other");
+  assert.ok(far.date && far.date.length > 0, "the further-out case carries a date label");
+});
+
+test("defaultFormatWhen: delegates the time component to the injected formatTime", () => {
+  const noon = new Date(2026, 5, 7, 12, 0, 0).getTime();
+  const out = defaultFormatWhen(noon, noon, () => "Z");
+  assert.equal(out.time, "Z");
+});
+
+// ── R2 (FEN-138): the ready label is pluralised by charge count ──────────────
+
+test("ready (1 charge): singular label, never '1 pixels'", () => {
+  const s = derivePlaceState(base({ gauge: { charges: 1, max: 6, cooldownUntil: 0 } }));
+  assert.equal(s.kind, "ready");
+  assert.equal(s.messageKey, "canvas.state.ready.one");
+});
+
+test("ready (≥2 charges): plural label", () => {
+  const s = derivePlaceState(base({ gauge: { charges: 2, max: 6, cooldownUntil: 0 } }));
+  assert.equal(s.messageKey, "canvas.state.ready");
+});
+
 test("banned (WS sticky hint): honoured even while permission still loading", () => {
   const s = derivePlaceState(base({ permission: undefined, gauge: null, bannedHint: true }));
   assert.equal(s.kind, "banned");
@@ -245,10 +314,13 @@ test("FR/EN parity: both catalogs carry every canvas.state.* key", () => {
   const keys: MessageKey[] = [
     "canvas.state.loading",
     "canvas.state.ready",
+    "canvas.state.ready.one",
     "canvas.state.cooldown",
     "canvas.state.signedOut",
     "canvas.state.frozen",
     "canvas.state.notStarted",
+    "canvas.state.notStarted.tomorrow",
+    "canvas.state.notStarted.date",
     "canvas.state.ended",
     "canvas.state.archived",
     "canvas.state.banned",

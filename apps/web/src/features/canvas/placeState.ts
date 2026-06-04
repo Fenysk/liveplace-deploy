@@ -115,6 +115,27 @@ export interface PlaceStateInput {
    * and locale-/timezone-agnostic; defaults to {@link defaultFormatTime}.
    */
   formatTime?: (epochMs: number) => string;
+  /**
+   * Resolves the open instant into a day-aware descriptor (today / tomorrow /
+   * other + a short date) so `notStarted` can name the day, not just the time
+   * (R1, FEN-138 — Recognition over Recall: "Opens at 14:30" can't be planned
+   * around if the open day is unknown). Injected like {@link formatTime} to keep
+   * derivation pure; defaults to {@link defaultFormatWhen}, which uses
+   * {@link formatTime} for the time component so a custom time format still wins.
+   */
+  formatWhen?: (epochMs: number, now: number) => OpenWhen;
+}
+
+/**
+ * Day-relative description of the event open instant, used to pick the right
+ * `notStarted` label. `date` is only meaningful (and only set) for `"other"`.
+ */
+export interface OpenWhen {
+  day: "today" | "tomorrow" | "other";
+  /** Short local time, e.g. "14:30". */
+  time: string;
+  /** Short local date, e.g. "7 juin" / "Jun 7" — set only when `day === "other"`. */
+  date?: string;
 }
 
 /** Seconds (ceil, floored at 0) until `untilMs` — drives the cooldown countdown. */
@@ -133,6 +154,40 @@ export function defaultFormatTime(epochMs: number): string {
   }
 }
 
+/** Local-midnight epoch for `epochMs` — the basis for whole-day comparisons. */
+function startOfLocalDay(epochMs: number): number {
+  const d = new Date(epochMs);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * Default day-aware resolver for the open instant (R1). Classifies the open day
+ * relative to `now` in the LOCAL calendar (not a fixed 24h offset — "tomorrow"
+ * means the next calendar day even if it's <24h away), and only computes a date
+ * label when the day is neither today nor tomorrow. `formatTime` is delegated so
+ * a caller-injected time format keeps applying; ISO is the last-resort fallback.
+ */
+export function defaultFormatWhen(
+  epochMs: number,
+  now: number,
+  formatTime: (epochMs: number) => string = defaultFormatTime,
+): OpenWhen {
+  const time = formatTime(epochMs);
+  try {
+    const dayDiff = Math.round((startOfLocalDay(epochMs) - startOfLocalDay(now)) / 86_400_000);
+    if (dayDiff <= 0) return { day: "today", time };
+    if (dayDiff === 1) return { day: "tomorrow", time };
+    const date = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" }).format(
+      new Date(epochMs),
+    );
+    return { day: "other", time, date };
+  } catch {
+    // Never lose the information: fall back to an ISO date on the "other" branch.
+    return { day: "other", time, date: new Date(epochMs).toISOString().slice(0, 10) };
+  }
+}
+
 /** True when the gauge is known and has no charges left (on cooldown). */
 function gaugeEmpty(gauge: GaugeState | null): boolean {
   return gauge !== null && gauge.charges <= 0;
@@ -146,15 +201,21 @@ function gaugeEmpty(gauge: GaugeState | null): boolean {
 function windowState(input: PlaceStateInput): PlaceState {
   const { eventStartAt, now } = input;
   if (eventStartAt != null && now < eventStartAt) {
-    const fmt = input.formatTime ?? defaultFormatTime;
-    return {
-      kind: "notStarted",
-      canPlace: false,
-      blocking: false,
-      messageKey: "canvas.state.notStarted",
-      params: { time: fmt(eventStartAt) },
-      until: eventStartAt,
-    };
+    const when = input.formatWhen
+      ? input.formatWhen(eventStartAt, now)
+      : defaultFormatWhen(eventStartAt, now, input.formatTime ?? defaultFormatTime);
+    const common = { kind: "notStarted" as const, canPlace: false, blocking: false, until: eventStartAt };
+    if (when.day === "tomorrow") {
+      return { ...common, messageKey: "canvas.state.notStarted.tomorrow", params: { time: when.time } };
+    }
+    if (when.day === "other") {
+      return {
+        ...common,
+        messageKey: "canvas.state.notStarted.date",
+        params: { date: when.date ?? "", time: when.time },
+      };
+    }
+    return { ...common, messageKey: "canvas.state.notStarted", params: { time: when.time } };
   }
   return {
     kind: "ended",
@@ -251,12 +312,13 @@ export function derivePlaceState(input: PlaceStateInput): PlaceState {
     };
   }
 
-  // Everything green.
+  // Everything green. Pick the singular label at exactly one charge (R2): the
+  // i18n layer has no plural engine, so the count drives the key, not ICU.
   return {
     kind: "ready",
     canPlace: true,
     blocking: false,
-    messageKey: "canvas.state.ready",
+    messageKey: gauge.charges === 1 ? "canvas.state.ready.one" : "canvas.state.ready",
     params: { charges: gauge.charges, max: gauge.max },
   };
 }
