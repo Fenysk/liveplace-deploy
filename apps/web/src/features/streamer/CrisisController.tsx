@@ -31,6 +31,7 @@ import {
   resolveBanPick,
   wipeConfirmView,
   resultAnnounce,
+  classifyResult,
   cancelledAnnounce,
   restoreConfirmView,
   restoreResultAnnounce,
@@ -153,16 +154,31 @@ export function CrisisController(props: CrisisControllerProps): React.ReactEleme
     setBanPick(null);
   }
 
+  // A dispatch failure must NOT dump the mod out of select-mode (spec FEN-157 §2
+  // Flow A unhappy-path): under a raid, a transient error otherwise forces a full
+  // re-aim at the griefer's pixel. So we exit only on a clean/pending outcome; on
+  // error (or a thrown action, treated as error) we re-enable the action and KEEP
+  // select-mode + the confirm target so retry is one gesture. Escape/Annuler still
+  // exit via cancelMode regardless (FEN-176).
   function confirmBan(): void {
     if (!banTarget) return;
     setPending(true);
     void banAndWipe({ canvasId: props.canvasId, targetUserId: banTarget.userId })
-      .then((res) => announce(resultAnnounce("ban", res)))
-      .catch(() => announce(resultAnnounce("ban", { cellsAffected: 0, dispatched: false, detail: "error" })))
-      .finally(() => {
-        setPending(false);
-        resetBan();
-        props.onExit();
+      .then((res) => {
+        announce(resultAnnounce("ban", res));
+        return classifyResult(res);
+      })
+      .catch(() => {
+        announce(resultAnnounce("ban", { cellsAffected: 0, dispatched: false, detail: "error" }));
+        return "error" as const;
+      })
+      .then((outcome) => {
+        setPending(false); // re-enable the action either way
+        if (outcome === "clean" || outcome === "pending") {
+          resetBan();
+          props.onExit();
+        }
+        // error/noop → stay in select-mode with banTarget kept so retry needs no re-aim.
       });
   }
 
@@ -170,12 +186,21 @@ export function CrisisController(props: CrisisControllerProps): React.ReactEleme
     if (!wipeRegion) return;
     setPending(true);
     void deletePixels({ canvasId: props.canvasId, cells: wipeRegion.cells })
-      .then((res) => announce(resultAnnounce("wipe", res)))
-      .catch(() => announce(resultAnnounce("wipe", { cellsAffected: 0, dispatched: false, detail: "error" })))
-      .finally(() => {
-        setPending(false);
-        setWipeRegion(null);
-        props.onExit();
+      .then((res) => {
+        announce(resultAnnounce("wipe", res));
+        return classifyResult(res);
+      })
+      .catch(() => {
+        announce(resultAnnounce("wipe", { cellsAffected: 0, dispatched: false, detail: "error" }));
+        return "error" as const;
+      })
+      .then((outcome) => {
+        setPending(false); // re-enable the action either way
+        if (outcome === "clean" || outcome === "pending") {
+          setWipeRegion(null);
+          props.onExit();
+        }
+        // error/noop → keep the outlined region so retry needs no re-outline.
       });
   }
 

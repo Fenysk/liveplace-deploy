@@ -170,7 +170,14 @@ export function CrisisSelector(props: CrisisSelectorProps): React.ReactElement {
         </button>
       </div>
       <div style={canvasFrameStyle}>
-        <canvas ref={canvasRef} className="lp-canvas" tabIndex={0} aria-label={t("studio.crisis.banPrompt")} />
+        {/* Accessible name follows the active flow so a SR user focusing the canvas hears the
+            RIGHT prompt — ban vs wipe (FEN-176; recognition over recall, correct conceptual model). */}
+        <canvas
+          ref={canvasRef}
+          className="lp-canvas"
+          tabIndex={0}
+          aria-label={t(props.mode === "ban" ? "studio.crisis.banPrompt" : "studio.crisis.wipePrompt")}
+        />
       </div>
     </div>
   );
