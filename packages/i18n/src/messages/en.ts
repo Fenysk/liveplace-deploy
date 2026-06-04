@@ -55,7 +55,10 @@ export const en = {
   "canvas.state.ready": "You can place — {charges} pixels ready",
   // Singular variant (charges === 1) — derivePlaceState picks the key (R2, FEN-138).
   "canvas.state.ready.one": "You can place — 1 pixel ready",
-  "canvas.state.cooldown": "Out of pixels — refills in {seconds}s",
+  // No {seconds} here: the per-second countdown is owned by the forward-framed
+  // Lot F line (canvas.cooldown.*), so this rang-1 permission line stays static
+  // and a screen reader hears it once, not every tick (FEN-165, finding 1+2).
+  "canvas.state.cooldown": "Out of pixels — refilling",
   "canvas.state.signedOut": "Sign in with Twitch to place",
   "canvas.state.frozen": "Placing is paused",
   // "notStarted" disambiguates the open day so the user can plan their return (R1,
@@ -102,9 +105,15 @@ export const en = {
   // Forward-oriented countdown: aim/arm the next cell while it refills, then
   // drop it in one gesture at refill. No "skip cooldown" — you only aim ahead.
   "canvas.armHere": "Aim for refill",
-  "canvas.cooldown.waiting": "Aim your next pixel while it refills — {seconds}s",
-  "canvas.cooldown.armed": "Next pixel ready — drops in {seconds}s",
+  // Phase strings carry NO {seconds}: the ticking value is rendered in a separate
+  // aria-hidden span (canvas.cooldown.seconds) so the live region announces each
+  // phase transition once, not every second (FEN-165 finding 1). The visible
+  // per-second countdown stays for sighted users.
+  "canvas.cooldown.waiting": "Aim your next pixel while it refills",
+  "canvas.cooldown.armed": "Next pixel armed — drops at refill",
   "canvas.cooldown.ready": "Refilled — confirm to drop your pixel",
+  // Visible-only ticking counter, mirrored into an aria-hidden span (FEN-165).
+  "canvas.cooldown.seconds": "{seconds}s",
 
   // Keyboard pose + screen-reader announcements (FEN-123, WCAG 2.1.1 / 4.1.3)
   "canvas.canvasLabel": "Pixel canvas",

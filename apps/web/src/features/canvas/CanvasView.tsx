@@ -786,10 +786,23 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
             the wait into anticipation. It invites aiming the next cell, confirms
             it is armed, then prompts the single confirm gesture at refill. Sober
             (no "skip cooldown"); a status, not an alert. `data-phase` exposes the
-            engagement phase for the UI phase to style (visual delegated). */}
+            engagement phase for the UI phase to style (visual delegated).
+
+            a11y (FEN-165): the phase text is the only live content, so the polite
+            live region announces phase transitions (waiting → armed → refilled)
+            ONCE, not the ticking seconds every tick. The visible per-second
+            countdown stays for sighted users but lives in an aria-hidden span so
+            screen readers skip it. This line owns the single forward-framed
+            countdown; rang-1 (lp-state) no longer reprints the seconds. */}
         {cooldownView?.messageKey && (
           <p className="lp-cooldown" data-phase={cooldownView.phase} role="status">
             {t(cooldownView.messageKey as MessageKey, cooldownView.params)}
+            {cooldownView.onCooldown && cooldownView.secondsUntilNext > 0 && (
+              <span className="lp-cooldown-secs" aria-hidden="true">
+                {" — "}
+                {t("canvas.cooldown.seconds", { seconds: cooldownView.secondsUntilNext })}
+              </span>
+            )}
           </p>
         )}
 

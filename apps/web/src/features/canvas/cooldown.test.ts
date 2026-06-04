@@ -87,13 +87,19 @@ test("waiting (cooling, nothing armed) invites aiming the next cell", () => {
   const v = view({ charges: 0, staged: 0 });
   assert.equal(v.phase, "waiting");
   assert.equal(v.messageKey, "canvas.cooldown.waiting");
-  assert.deepEqual(v.params, { seconds: 30 });
+  // FEN-165: the phase message no longer carries {seconds} (the announced text
+  // must stay static so a polite live region doesn't spam every tick). The
+  // ticking value lives on `secondsUntilNext` for the aria-hidden visual span.
+  assert.equal(v.params, undefined);
+  assert.equal(v.secondsUntilNext, 30);
 });
 
 test("armed (cooling, one armed) announces the upcoming drop", () => {
   const v = view({ charges: 0, staged: 1 });
   assert.equal(v.messageKey, "canvas.cooldown.armed");
-  assert.deepEqual(v.params, { seconds: 30 });
+  // FEN-165: no {seconds} in the announced message; countdown via secondsUntilNext.
+  assert.equal(v.params, undefined);
+  assert.equal(v.secondsUntilNext, 30);
 });
 
 test("every non-null phase key exists in BOTH catalogs (FR/EN parity)", () => {
