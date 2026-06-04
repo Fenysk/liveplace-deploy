@@ -49,6 +49,13 @@ export interface RendererHooks {
    * when the pointer leaves the canvas / is panning. Drives the pixel readout.
    */
   onHover?: (cell: { x: number; y: number } | null, clientX: number, clientY: number) => void;
+  /**
+   * Fired (only on change) when the on-screen cell size crosses the comfortable
+   * touch-target threshold — `true` means a cell is now smaller than ~24 CSS px,
+   * so tapping is imprecise (Fitts) and the UI should nudge the user to zoom in
+   * before posing (FEN-124 U5). Not fired in non-interactive (OBS) mode.
+   */
+  onScaleClass?: (belowTouchTarget: boolean) => void;
 }
 
 /** A staged cell drawn as a preview rectangle (FEN-113 selection overlay). */
@@ -80,6 +87,7 @@ const GRID_MIN_SCALE = 4; // device px/cell below which a grid is just moiré
 const GRID_STYLE = "rgba(0,0,0,0.28)";
 
 const DRAG_THRESHOLD_PX = 4; // movement beyond this turns a click into a pan
+const TOUCH_TARGET_CSS_PX = 24; // below this on-screen cell size, posing is imprecise (FEN-124 U5)
 
 /** The fixed palette as CSS hex strings, for the swatch UI (computed once). */
 export const PALETTE_HEX: readonly string[] = PALETTE.map(
@@ -128,6 +136,10 @@ export class CanvasRenderer {
   // hovered cell on top of the live board; the batch state itself lives in React.
   private overlay: readonly OverlayCell[] = [];
   private hoverCell: { x: number; y: number } | null = null;
+
+  // last reported "cell smaller than the touch target" class, so onScaleClass
+  // fires only on a real crossing rather than every frame (FEN-124 U5).
+  private lastBelowTarget: boolean | null = null;
 
   private readonly interactive: boolean;
   private readonly background: string | null;
@@ -339,7 +351,22 @@ export class CanvasRenderer {
     ctx.setTransform(this.view.scale, 0, 0, this.view.scale, this.view.tx, this.view.ty);
     ctx.drawImage(this.offscreen, 0, 0);
     if (this.grid) this.drawGrid();
-    if (this.interactive) this.drawOverlay();
+    if (this.interactive) {
+      this.drawOverlay();
+      this.emitScaleClass();
+    }
+  }
+
+  /**
+   * Report (only on change) whether a cell is now smaller than the comfortable
+   * touch target, so the UI can suggest zooming in before posing (FEN-124 U5).
+   * `view.scale` is device px per cell; divide by `dpr` for CSS px.
+   */
+  private emitScaleClass(): void {
+    const below = this.view.scale / this.dpr < TOUCH_TARGET_CSS_PX;
+    if (below === this.lastBelowTarget) return;
+    this.lastBelowTarget = below;
+    this.hooks.onScaleClass?.(below);
   }
 
   /**

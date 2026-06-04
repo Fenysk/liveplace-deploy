@@ -149,6 +149,27 @@ html.lp-obs-root body {
   opacity: 0.7;
 }
 
+/* Low-zoom nudge (FEN-124 U5) — warmer tint so it reads as actionable advice. */
+.lp-hint--zoom {
+  opacity: 0.85;
+  color: #ffe9b0;
+}
+
+/* Draw-mode indicator (FEN-124 U4) — small persistent badge so the mode is
+   legible after a commit clears the batch. */
+.lp-mode {
+  display: inline-block;
+  margin: 8px 0 0;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #cfe8ff;
+  background: rgba(40, 80, 120, 0.4);
+  border: 1px solid rgba(120, 180, 240, 0.45);
+  border-radius: 999px;
+}
+
 /* Ephemeral feedback toast (placement refusals / local rejections). */
 .lp-toast {
   position: fixed;
@@ -167,4 +188,10 @@ html.lp-obs-root body {
   background: rgba(30, 22, 0, 0.86);
   border-color: #5a4a2a;
   color: #ffe9b0;
+}
+/* Positive commit acknowledgement (FEN-124 U7) — green, distinct from refusals. */
+.lp-toast.is-success {
+  background: rgba(0, 26, 12, 0.86);
+  border-color: #2a5a3a;
+  color: #c6f6d5;
 }

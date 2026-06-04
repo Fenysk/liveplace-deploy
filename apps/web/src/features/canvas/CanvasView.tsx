@@ -34,7 +34,7 @@ const DEFAULT_COLOR = 5; // red — a visible default pose colour
 const TOAST_MS = 2600;
 
 interface ToastState {
-  kind: PlacementFeedback["kind"] | "cap";
+  kind: PlacementFeedback["kind"] | "cap" | "placed";
   messageKey: string;
   params?: Record<string, string | number>;
 }
@@ -67,6 +67,8 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
   const drawingRef = useRef(drawing);
   drawingRef.current = drawing;
   const [armed, setArmed] = useState<{ x: number; y: number } | null>(null);
+  // True when a cell is smaller than the touch target — nudge to zoom in (U5).
+  const [belowTarget, setBelowTarget] = useState(false);
 
   const [gauge, setGauge] = useState<GaugeState | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -109,9 +111,37 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
       const msg = placement.place(cell.x, cell.y, cell.color);
       if (msg) netRef.current?.place(msg);
     }
+    // Light positive acknowledgement of the commit (Peak-End, U7).
+    if (cells.length > 0) {
+      showToast({ kind: "placed", messageKey: "canvas.feedback.placed", params: { count: cells.length } });
+    }
     setArmed(null);
     syncOverlay();
-  }, [syncOverlay]);
+  }, [showToast, syncOverlay]);
+
+  // Express single-pixel path (U1): stage the armed cell AND commit in one tap,
+  // so the first mobile pixel is 2 gestures (tap → "Poser ici"). Keeps the batch
+  // "Dessiner" path intact for multi-cell construction.
+  const placeHere = useCallback(
+    (x: number, y: number) => {
+      const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
+      const r = selectionRef.current.apply(x, y, c);
+      if (r.kind === "cap") {
+        showToast({ kind: "cap", messageKey: "canvas.feedback.capReached", params: { max: r.cap } });
+        setArmed(null);
+        syncOverlay();
+        return;
+      }
+      if (r.kind === "locked") {
+        showToast({ kind: "banned", messageKey: "canvas.feedback.banned" });
+        setArmed(null);
+        syncOverlay();
+        return;
+      }
+      validate(); // commits the just-staged single cell and clears `armed`
+    },
+    [showToast, syncOverlay, validate],
+  );
 
   // Annuler: empty the batch and leave draw mode.
   const cancel = useCallback(() => {
@@ -163,6 +193,7 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
           hoverRef.current = cell;
           rendererRef.current?.setOverlay(selectionRef.current.entries(), cell);
         },
+        onScaleClass: setBelowTarget,
       },
       { interactive: true },
     );
@@ -267,39 +298,67 @@ export function CanvasView({ slug = null }: CanvasViewProps): React.ReactElement
             {t("canvas.erase")}
           </button>
 
-          {/* Mobile gate: confirm intent to draw on the armed cell. */}
+          {/* Mobile gate on the armed cell: express single pose ("Poser ici", 2
+              gestures — U1) OR enter batch draw mode to build a multi-cell set. */}
           {armed && !drawing && (
-            <button
-              type="button"
-              className="lp-btn is-primary"
-              onClick={() => {
-                setDrawing(true);
-                stageCell(armed.x, armed.y);
-                setArmed(null);
-              }}
-            >
-              {t("canvas.draw")}
-            </button>
-          )}
-
-          {/* Valider / Annuler appear once the batch is non-empty. */}
-          {count > 0 && (
             <>
-              <button type="button" className="lp-btn is-primary" disabled={sel.isLocked} onClick={validate}>
-                {t("canvas.validate", { count })}
+              <button type="button" className="lp-btn is-primary" onClick={() => placeHere(armed.x, armed.y)}>
+                {t("canvas.placeHere")}
               </button>
-              <button type="button" className="lp-btn" onClick={cancel}>
-                {t("canvas.cancel")}
+              <button
+                type="button"
+                className="lp-btn"
+                onClick={() => {
+                  setDrawing(true);
+                  stageCell(armed.x, armed.y);
+                  setArmed(null);
+                }}
+              >
+                {t("canvas.draw")}
               </button>
             </>
           )}
+
+          {/* Valider appears once the batch is non-empty. */}
+          {count > 0 && (
+            <button type="button" className="lp-btn is-primary" disabled={sel.isLocked} onClick={validate}>
+              {t("canvas.validate", { count })}
+            </button>
+          )}
+
+          {/* Always-visible exit while building or in draw mode (U4): "Annuler"
+              with a pending batch, "Terminer" when empty so there is always a
+              way out of draw mode. */}
+          {(count > 0 || drawing) && (
+            <button type="button" className="lp-btn" onClick={cancel}>
+              {count > 0 ? t("canvas.cancel") : t("canvas.finish")}
+            </button>
+          )}
         </div>
 
+        {/* Mode indicator: draw mode persists across commits on mobile (U4). */}
+        {drawing && (
+          <p className="lp-mode" role="status">
+            {t("canvas.drawingMode")}
+          </p>
+        )}
+
+        {/* Low-zoom nudge while there is intent to pose (Fitts, U5). */}
+        {belowTarget && (drawing || armed !== null || count > 0) && (
+          <p className="lp-hint lp-hint--zoom" role="status">
+            {t("canvas.zoomHint")}
+          </p>
+        )}
         {count === 0 && !armed && <p className="lp-hint">{t("canvas.batchHint")}</p>}
       </div>
 
       {toast && (
-        <div className={`lp-toast${toast.kind === "cooldown" ? " is-cooldown" : ""}`} role="status">
+        <div
+          className={`lp-toast${
+            toast.kind === "placed" ? " is-success" : toast.kind === "cooldown" ? " is-cooldown" : ""
+          }`}
+          role="status"
+        >
           {t(toast.messageKey as MessageKey, toast.params)}
         </div>
       )}
