@@ -68,6 +68,13 @@ export const en = {
   "canvas.state.banned": "You can no longer place on this canvas",
   "canvas.state.notFound": "This canvas can't be found",
 
+  // Viewer legibility of moderation events (UX Lot I, FEN-121) — "a collective
+  // event happened" without jargon or anxiety (D8 row, lisibilité only, zero
+  // viewer feature). Sourced from a server-initiated bulk change / freeze toggle.
+  "canvas.moderation.areaChanged": "An area was just changed",
+  "canvas.moderation.paused": "Placing was just paused",
+  "canvas.moderation.reopened": "Placing is open again",
+
   // Canvas placement feedback (F4) — optimistic pose/erase rollback (FEN-60)
   "canvas.feedback.cooldown": "On cooldown — next pixel in {seconds}s",
   "canvas.feedback.banned": "You are banned from this canvas",
@@ -210,6 +217,23 @@ export const en = {
   "studio.broadcast.advancedBody": "Append URL options like ?bg=000000&grid=1&zoom=8 to frame the overlay.",
   "studio.broadcast.notFound": "That canvas doesn't exist or isn't yours.",
   "studio.broadcast.back": "Back to dashboard",
+
+  // Streamer crisis panel (UX Lot I, FEN-121) — react to a raid without panic
+  // (D6 Flow S3 / WF-8). Freeze is the always-present 1-gesture panic control;
+  // ban/wipe are grouped triage tools surfaced only once frozen.
+  "studio.crisis.status.calm": "Placement open — emergency freeze ready",
+  "studio.crisis.status.frozen": "Placement frozen — act, then reopen",
+  "studio.crisis.freeze": "Freeze placing",
+  "studio.crisis.reopen": "Reopen placing",
+  "studio.crisis.ban": "Ban an author",
+  "studio.crisis.wipe": "Wipe an area",
+  "studio.crisis.restore": "Undo this wipe",
+  "studio.crisis.wipeWarning": "Erasing re-reveals what was underneath.",
+  "studio.crisis.firstHint": "If things go wrong, freeze placing here.",
+  "studio.crisis.banPrompt": "Pick the author to ban on the canvas.",
+  "studio.crisis.wipePrompt": "Pick the area to wipe on the canvas.",
+  "studio.crisis.announce.frozen": "Placement frozen — crisis tools are now available.",
+  "studio.crisis.announce.reopened": "Placement reopened.",
 
   // Generic
   "common.loading": "Loading…",

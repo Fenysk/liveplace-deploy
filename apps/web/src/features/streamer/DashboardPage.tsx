@@ -4,10 +4,10 @@
  * The streamer's home base: ONE active canvas promoted to the top (its live
  * status, visibility and "Live now" badge answer F11 "what's online right now"),
  * with the read-only archives listed below. From the active card the streamer
- * reaches Broadcast (OBS, WF-7) in one click, and can freeze/reopen
- * placement inline (the in-scope `setPlacementOpen`; the full crisis surface is
- * Lot I / FEN-121). Archives can be reactivated (`activateCanvas`, one-active
- * invariant enforced server-side).
+ * reaches Broadcast (OBS, WF-7) in one click, and drives the crisis surface
+ * inline (emergency freeze / reopen + grouped ban/wipe — Lot I / FEN-121, via the
+ * audit-logged `moderation:setFrozen`). Archives can be reactivated
+ * (`activateCanvas`, one-active invariant enforced server-side).
  *
  * Presentation only: the active/archives split, status keys and empty-state all
  * come from the pure `buildDashboardView` (studioView.ts, unit-tested). Convex
@@ -17,7 +17,7 @@
  * (the fine UI pass is delegated — Designer / Phase 3).
  */
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { useLocale, useTranslate } from "@canvas/i18n/react";
 import { authClient } from "../../auth/auth-client";
@@ -29,6 +29,8 @@ import {
   type ActiveCanvasView,
   type StreamerCanvas,
 } from "./studioView.js";
+import { CrisisPanel } from "./CrisisPanel.js";
+import type { CrisisActionId } from "./crisisView.js";
 
 /** Raw `canvases:listMyCanvases` row (the subset the dashboard renders). */
 interface CanvasDoc {
@@ -48,14 +50,27 @@ interface CanvasDoc {
 const listMyCanvases = makeFunctionReference<"query", Record<string, never>, CanvasDoc[]>(
   "canvases:listMyCanvases",
 );
-const setPlacementOpen = makeFunctionReference<
-  "mutation",
-  { canvasId: string; open: boolean },
-  null
->("canvases:setPlacementOpen");
 const activateCanvas = makeFunctionReference<"mutation", { canvasId: string }, null>(
   "canvases:activateCanvas",
 );
+// Emergency freeze is the audit-logged moderation action (Lot I / FEN-121 backend
+// contract): a crisis freeze writes the audit log and forces the gateway
+// `canvas:frozen` flag — heavier than a casual `canvases:setPlacementOpen` toggle.
+const setFrozen = makeFunctionReference<
+  "action",
+  { canvasId: string; frozen: boolean },
+  { frozen: boolean; dispatched: boolean; detail: string }
+>("moderation:setFrozen");
+
+/** LocalStorage flag for the one-time first-crisis freeze hint (D9 persistence). */
+const FREEZE_HINT_KEY = "lp.crisis.freezeHintSeen";
+function readFreezeHintSeen(): boolean {
+  try {
+    return localStorage.getItem(FREEZE_HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 /** Project a Convex doc onto the React-free shape the view-model operates over. */
 function toStreamerCanvas(doc: CanvasDoc): StreamerCanvas {
@@ -82,13 +97,19 @@ export function DashboardPage(): React.ReactElement {
   // Skip the auth-gated query entirely until signed in (it would otherwise throw
   // `requireUserId`); `"skip"` is Convex's official no-subscription sentinel.
   const docs = useQuery(listMyCanvases, isSignedIn ? {} : "skip");
-  const setPlacement = useMutation(setPlacementOpen);
   const activate = useMutation(activateCanvas);
+  const freeze = useAction(setFrozen);
 
   // Polite SR announcement for freeze/reopen + reactivate (S9 / FEN-143). These
   // mutations only re-render a label, which screen readers don't announce; an
   // aria-live region gives non-visual users the same confirmation the page does.
   const [announce, setAnnounce] = useState("");
+
+  // Crisis panel state (Lot I / FEN-121): which crisis action is dispatching (so
+  // its button disables — idempotency guard), and the persisted one-time freeze
+  // hint flag (D9 "vu mémorisé").
+  const [pendingCrisis, setPendingCrisis] = useState<CrisisActionId | null>(null);
+  const [freezeHintSeen, setFreezeHintSeen] = useState(readFreezeHintSeen);
 
   const view = buildDashboardView(
     docs?.map(toStreamerCanvas),
@@ -96,10 +117,42 @@ export function DashboardPage(): React.ReactElement {
   );
   const activeTitle = view.state === "ready" ? view.active?.canvas.title ?? null : null;
 
-  /** Reopen/freeze placement on the active canvas, announcing the new state. */
-  function toggleFreeze(canvasId: string, open: boolean): void {
-    void setPlacement({ canvasId, open });
-    setAnnounce(t(open ? "studio.announce.reopened" : "studio.announce.frozen"));
+  /**
+   * Emergency freeze / reopen on the active canvas (Lot I / FEN-121). Routes
+   * through the audit-logged `moderation:setFrozen` (the crisis contract), marks
+   * the matching crisis button pending while in flight, persists the one-time
+   * freeze hint as "seen" the first time the streamer freezes (D9), and announces
+   * the new state politely for SR users (S9).
+   */
+  function crisisFreeze(canvasId: string, frozen: boolean): void {
+    setPendingCrisis(frozen ? "freeze" : "reopen");
+    if (frozen && !freezeHintSeen) {
+      setFreezeHintSeen(true);
+      try {
+        localStorage.setItem(FREEZE_HINT_KEY, "1");
+      } catch {
+        /* private mode — the hint just shows again next session, harmless. */
+      }
+    }
+    void freeze({ canvasId, frozen })
+      .then(() =>
+        setAnnounce(t(frozen ? "studio.crisis.announce.frozen" : "studio.crisis.announce.reopened")),
+      )
+      .catch(() => setAnnounce(t("common.error")))
+      .finally(() => setPendingCrisis(null));
+  }
+
+  // Grouped triage tools (ban / wipe). Both need a TARGET — which author, which
+  // region — and that selection surface is the delegated visual piece for this
+  // lot (UI phase / [FEN-153]). Here the buttons exist and are findable (the lot's
+  // < 10 s acceptance); clicking announces the next step so the streamer knows to
+  // pick the target on the canvas. The dispatch to `moderation.banAndWipe` /
+  // `deletePixels` is wired when that selection lands.
+  function promptBan(): void {
+    setAnnounce(t("studio.crisis.banPrompt"));
+  }
+  function promptWipe(): void {
+    setAnnounce(t("studio.crisis.wipePrompt"));
   }
 
   /**
@@ -154,7 +207,11 @@ export function DashboardPage(): React.ReactElement {
           {view.active ? (
             <ActiveCard
               active={view.active}
-              onToggleFreeze={(open) => toggleFreeze(view.active!.canvas.id, open)}
+              pendingCrisis={pendingCrisis}
+              freezeHintSeen={freezeHintSeen}
+              onToggleFreeze={(frozen) => crisisFreeze(view.active!.canvas.id, frozen)}
+              onBan={promptBan}
+              onWipe={promptWipe}
             />
           ) : (
             // Has archives but nothing active — neutral copy + CTA, NOT the
@@ -190,10 +247,19 @@ export function DashboardPage(): React.ReactElement {
 /** The single highlighted active canvas (WF-5 top block). */
 function ActiveCard({
   active,
+  pendingCrisis,
+  freezeHintSeen,
   onToggleFreeze,
+  onBan,
+  onWipe,
 }: {
   active: ActiveCanvasView;
-  onToggleFreeze: (open: boolean) => void;
+  pendingCrisis: CrisisActionId | null;
+  freezeHintSeen: boolean;
+  /** `frozen` true → emergency-freeze; false → reopen. */
+  onToggleFreeze: (frozen: boolean) => void;
+  onBan: () => void;
+  onWipe: () => void;
 }): React.ReactElement {
   const t = useTranslate();
   const { canvas, statusKey, visibilityKey } = active;
@@ -225,14 +291,18 @@ function ActiveCard({
         >
           {t("studio.action.openCanvas")}
         </button>
-        <button
-          type="button"
-          style={secondaryBtnStyle}
-          onClick={() => onToggleFreeze(!canvas.placementOpen)}
-        >
-          {canvas.placementOpen ? t("studio.action.freeze") : t("studio.action.unfreeze")}
-        </button>
       </div>
+
+      {/* Crisis surface (Lot I / FEN-121): emergency freeze in one gesture, then
+          the grouped ban/wipe triage tools + reopen once frozen (WF-8 / Flow S3). */}
+      <CrisisPanel
+        placementOpen={canvas.placementOpen}
+        pendingAction={pendingCrisis}
+        freezeHintSeen={freezeHintSeen}
+        onToggleFreeze={onToggleFreeze}
+        onBan={onBan}
+        onWipe={onWipe}
+      />
     </article>
   );
 }
