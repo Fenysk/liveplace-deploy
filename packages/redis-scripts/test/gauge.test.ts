@@ -17,6 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   refillGauge,
+  grantCharges,
   nextRefillAt,
   DEFAULT_GAUGE,
   type GaugeParams,
@@ -128,4 +129,50 @@ test("custom canvas config (owner override) is honoured", () => {
   assert.equal(refillGauge(stored(0, T0), T0 + 10_000, fast).charges, 2);
   // Capped at 10.
   assert.equal(refillGauge(stored(0, T0), T0 + 100_000, fast).charges, 10);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// grantCharges (tier claim, FEN-130) — the +1 usable charge a claim hands out.
+// Mirror of grant.lua; keep in sync.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("grant adds on top of the refilled balance (no replace)", () => {
+  // 3 charges, no time passed → +1 grant = 4. Not full, so the clock is unchanged.
+  const s = grantCharges(stored(3, T0), T0, 1, P);
+  assert.equal(s.charges, 4);
+  assert.equal(s.max, 20);
+  assert.equal(s.ts, T0);
+});
+
+test("grant lands on top of accrued refill, not instead of it", () => {
+  // From 2 charges, after 2 ticks (60s) → refilled to 4, then +1 grant = 5.
+  const s = grantCharges(stored(2, T0), T0 + 60_000, 1, P);
+  assert.equal(s.charges, 5);
+});
+
+test("grant never exceeds the effective max and pins the clock when full (CA2)", () => {
+  const s = grantCharges(stored(19, T0), T0, 5, P); // 19 + 5 → clamp 20
+  assert.equal(s.charges, 20);
+  assert.equal(s.ts, T0); // full → clock pinned to now
+  assert.equal(nextRefillAt(s, P), 0);
+});
+
+test("a claim that raises the max makes room for the granted charge (CA3)", () => {
+  // Gauge was full at base 20; the claim lifted the effective max to 21 and grants 1.
+  const s = grantCharges(stored(20, T0), T0, 1, withMax(21));
+  assert.equal(s.charges, 21);
+  assert.equal(s.max, 21);
+});
+
+test("granting to a never-placed gauge materialises it full (clamped), persisting the ceiling", () => {
+  const s = grantCharges(null, T0, 1, withMax(21));
+  assert.equal(s.charges, 21); // conceptually full at the raised max; grant clamped
+  assert.equal(s.max, 21);
+  assert.equal(s.ts, T0);
+});
+
+test("grant of 0 (or garbage) is a pure refill", () => {
+  assert.equal(grantCharges(stored(2, T0), T0 + 30_000, 0, P).charges, 3); // refill only
+  assert.equal(grantCharges(stored(2, T0), T0, -3, P).charges, 2); // negative → no add
+  assert.equal(grantCharges(stored(2, T0), T0, Number.NaN, P).charges, 2);
 });
