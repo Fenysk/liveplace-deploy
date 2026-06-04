@@ -33,16 +33,6 @@ const siteUrl = process.env.SITE_URL ?? process.env.BETTER_AUTH_URL ?? "";
  */
 export const TWITCH_SCOPES = ["user:read:email", "moderation:read"] as const;
 
-/** Raw Twitch Helix user profile fields we read in `mapProfileToUser`. */
-interface TwitchProfile {
-  id?: string;
-  sub?: string;
-  login?: string;
-  preferred_username?: string;
-  display_name?: string;
-  profile_image_url?: string;
-}
-
 /**
  * Backend client for the Better Auth component. The `user.onCreate` trigger is
  * how the app-side `profiles` row is created transactionally on first sign-in
@@ -55,19 +45,27 @@ interface TwitchProfile {
 // (otherwise TS7022: implicitly `any`, referenced in its own initializer).
 export const authComponent: ReturnType<typeof createClient<DataModel>> = createClient<DataModel>(components.betterAuth, {
   triggers: {
+    // CA1 — the app-side `profiles` row is created transactionally on first
+    // sign-in. We deliberately DO NOT carry `twitchId`/`login` as Better Auth
+    // user `additionalFields`: the @convex-dev/better-auth component ships a
+    // fixed `user` table schema (name/email/image/username/…) and its `create`
+    // mutation validates `data` against that strict validator — any extra field
+    // is rejected, which surfaced to the browser as `?error=unable_to_create_user`
+    // (FEN-106). Instead the Twitch identifiers are filled in from the `account`
+    // trigger below, where they actually live (`account.accountId` == Twitch id).
     user: {
       onCreate: async (ctx, authUser) => {
         const u = authUser as typeof authUser & {
           name?: string | null;
           image?: string | null;
-          twitchId?: string | null;
-          login?: string | null;
         };
         await ctx.db.insert("profiles", {
           authUserId: authUser._id,
-          twitchId: u.twitchId ?? "",
-          login: u.login ?? "",
-          displayName: u.name ?? u.login ?? "",
+          // Backfilled by the `account.onCreate` trigger (created right after
+          // the user, in the same OAuth sign-in transaction).
+          twitchId: "",
+          login: "",
+          displayName: u.name ?? "",
           avatarUrl: u.image ?? undefined,
           role: "user",
           createdAt: Date.now(),
@@ -79,6 +77,36 @@ export const authComponent: ReturnType<typeof createClient<DataModel>> = createC
           .withIndex("by_authUserId", (q) => q.eq("authUserId", authUser._id))
           .unique();
         if (existing) await ctx.db.delete(existing._id);
+      },
+    },
+    // The Twitch identity provider account, created immediately after the user
+    // on first sign-in. `accountId` is the stable Twitch user id (the OIDC
+    // `sub`); `userId` links back to the Better Auth user. We patch the matching
+    // `profiles` row with the Twitch id + login slug (CA1: twitchId/login).
+    account: {
+      onCreate: async (ctx, account) => {
+        const a = account as typeof account & {
+          providerId?: string | null;
+          accountId?: string | null;
+          userId?: string | null;
+        };
+        if (a.providerId !== "twitch" || !a.userId) return;
+        const profile = await ctx.db
+          .query("profiles")
+          .withIndex("by_authUserId", (q) => q.eq("authUserId", a.userId ?? ""))
+          .unique();
+        if (!profile) return;
+        // Twitch's OIDC id_token exposes `sub` (id) + `preferred_username`
+        // (display name) but not the lowercase login slug. The login slug is
+        // conventionally the display name lowercased; exact-case resolution via
+        // the Helix users API is a later refinement (F8). The `/u/{login}` page
+        // matches case-insensitively, so the lowercased display name is correct
+        // for lookups today.
+        const login = profile.login || (profile.displayName ?? "").toLowerCase();
+        await ctx.db.patch(profile._id, {
+          twitchId: a.accountId ?? "",
+          login,
+        });
       },
     },
   },
@@ -106,23 +134,18 @@ export const createAuth = (
     database: authComponent.adapter(ctx),
     // Twitch is the only identity provider; link accounts to a single user.
     account: { accountLinking: { enabled: true } },
-    // Surface the Twitch identifiers onto the user record so the onCreate
-    // trigger can copy them into `profiles`. Not client-writable (input:false).
-    user: {
-      additionalFields: {
-        twitchId: { type: "string", required: false, input: false },
-        login: { type: "string", required: false, input: false },
-      },
-    },
+    // NOTE: no Better Auth user `additionalFields` for twitchId/login — the
+    // Convex component's `user` table validator is strict and rejects unknown
+    // fields (that rejection is exactly what produced `unable_to_create_user`,
+    // FEN-106). The Twitch id + login are persisted onto `profiles` via the
+    // `account.onCreate` trigger above. Better Auth still auto-maps the standard
+    // identity fields (name ← preferred_username, image ← picture, email) from
+    // the Twitch OIDC id_token, all of which ARE in the component schema.
     socialProviders: {
       twitch: {
         clientId: process.env.TWITCH_CLIENT_ID ?? "",
         clientSecret: process.env.TWITCH_CLIENT_SECRET ?? "",
         scope: [...TWITCH_SCOPES],
-        mapProfileToUser: (profile: TwitchProfile) => ({
-          twitchId: String(profile.id ?? profile.sub ?? ""),
-          login: String(profile.login ?? profile.preferred_username ?? ""),
-        }),
       },
     },
     plugins: [convex({ authConfig })],
