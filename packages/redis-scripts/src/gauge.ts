@@ -114,6 +114,45 @@ export function refillGauge(
 }
 
 /**
+ * Grant `grant` extra charges to a gauge after a lazy refill (tier claim, Lot D
+ * / FEN-130). **This is the canonical algorithm grant.lua mirrors** — keep them
+ * in sync, exactly as place.lua/refill-peek.lua mirror {@link refillGauge}.
+ *
+ * Order matters: refill to `now` first (so the grant lands on top of the current
+ * earned balance, never replacing it), then add `grant`, clamped to the
+ * effective `max`. `max` here is the *raised* max — the gateway resolves the new
+ * `base + bonus` after the claim bumped `gaugeMaxBonus`, so a claim that lifts a
+ * full gauge's ceiling also makes room for the granted charge.
+ *
+ * - A never-placed gauge (`stored == null`) is conceptually full at the raised
+ *   max; the grant is clamped away, but the returned state materialises the gauge
+ *   so the new ceiling/charge persist (grant.lua writes the hash too).
+ * - `grant ≤ 0` is a pure refill (a harmless no-op on charges) — the no-op claim
+ *   path never reaches here, but it stays well-defined.
+ *
+ * Pure and side-effect free; `nowMs` is injected so it is deterministic.
+ */
+export function grantCharges(
+  stored: StoredGauge | null,
+  nowMs: number,
+  grant: number,
+  params: GaugeParams,
+): GaugeState {
+  const add = Number.isFinite(grant) && grant > 0 ? grant : 0;
+  const refilled = refillGauge(stored, nowMs, params);
+  const max = params.gaugeMax;
+
+  let charges = Math.min(max, refilled.charges + add);
+  let ts = refilled.ts;
+  // Full → pause regeneration (same rule as the refill / place.lua).
+  if (charges >= max) {
+    charges = max;
+    ts = nowMs;
+  }
+  return { charges, max, ts };
+}
+
+/**
  * Epoch ms at which the next charge lands, or 0 when the gauge is full.
  * Drives the client countdown ("compte à rebours") and the F4 cooldown gate.
  */

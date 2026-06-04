@@ -10,9 +10,11 @@ import {
   ConvexGaugeBonusSource,
   StaticGaugeBonusSource,
   SessionGauge,
+  IoredisGaugeGrantRunner,
   type ConvexQueryClient,
   type GaugeBonusSource,
 } from "../gaugeBonus";
+import { DEFAULT_GAUGE, userGaugeKey, type GaugeParams } from "@canvas/redis-scripts";
 
 test("effectiveGaugeMax = base + bonus (mirrors pointsRules)", () => {
   assert.equal(effectiveGaugeMax(20, 0), 20); // no upgrade → base only
@@ -110,4 +112,52 @@ test("SessionGauge.refresh keeps the last known bonus when the source fails", as
   fail = true;
   await assert.rejects(() => g.refresh(), /convex down/);
   assert.equal(g.effectiveGaugeMax, 25);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IoredisGaugeGrantRunner (tier claim, FEN-130) — the +1-charge grant seam.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Minimal fake exposing only the {script, evalsha} surface the runner uses. */
+class FakeGrantRedis {
+  loads = 0;
+  calls: Array<{ numKeys: number; args: string[] }> = [];
+  constructor(private readonly reply: unknown, private readonly failFirstWith?: string) {}
+  async script(_sub: "LOAD", _lua: string): Promise<string> {
+    this.loads++;
+    return `sha-${this.loads}`;
+  }
+  async evalsha(_sha: string, numKeys: number, ...args: string[]): Promise<unknown> {
+    this.calls.push({ numKeys, args });
+    if (this.failFirstWith && this.calls.length === 1) throw new Error(this.failFirstWith);
+    return this.reply;
+  }
+}
+
+const GP: GaugeParams = { ...DEFAULT_GAUGE, gaugeMax: 21 };
+
+test("grant runner forwards (gaugeKey, now, interval, amount, max, grant, ttl) and parses the snapshot", async () => {
+  const fake = new FakeGrantRedis([21, 21, 0]);
+  const runner = new IoredisGaugeGrantRunner(fake as never);
+  const out = await runner.grant("user-Z", GP, 1, 1_700_000_000_000);
+  assert.deepEqual(out, { charges: 21, max: 21, cooldownUntil: 0 });
+  assert.equal(fake.loads, 1); // SCRIPT LOAD once
+  assert.equal(fake.calls.length, 1);
+  const [call] = fake.calls;
+  assert.ok(call);
+  assert.equal(call.numKeys, 1);
+  // KEYS[1] = the per-user gauge hash; ARGV carries the effective max + grant.
+  assert.equal(call.args[0], userGaugeKey("user-Z"));
+  assert.deepEqual(call.args.slice(1), [
+    "1700000000000", String(GP.refillIntervalMs), String(GP.refillAmount), "21", "1", String(GP.gaugeTtlMs),
+  ]);
+});
+
+test("grant runner reloads the script once on NOSCRIPT and retries", async () => {
+  const fake = new FakeGrantRedis([20, 21, 1_700_000_030_000], "NOSCRIPT No matching script");
+  const runner = new IoredisGaugeGrantRunner(fake as never);
+  const out = await runner.grant("user-Z", GP, 2, 1_700_000_000_000);
+  assert.deepEqual(out, { charges: 20, max: 21, cooldownUntil: 1_700_000_030_000 });
+  assert.equal(fake.loads, 2); // initial LOAD + reload on NOSCRIPT
+  assert.equal(fake.calls.length, 2); // first throws, second succeeds
 });
