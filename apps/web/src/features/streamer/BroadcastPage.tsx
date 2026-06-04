@@ -12,7 +12,7 @@
  * stale link shows a clean not-found rather than a dead OBS source. Strings via
  * `t(...)` (FR↔EN).
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { useTranslate } from "@canvas/i18n/react";
@@ -37,6 +37,8 @@ export function BroadcastPage({ slug }: { slug: string }): React.ReactElement {
   const t = useTranslate();
   const canvas = useQuery(getCanvasBySlug, { slug });
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const urlRef = useRef<HTMLInputElement>(null);
 
   const obsUrl = buildObsUrl(currentOrigin(), slug);
 
@@ -44,10 +46,16 @@ export function BroadcastPage({ slug }: { slug: string }): React.ReactElement {
     try {
       await navigator.clipboard.writeText(obsUrl);
       setCopied(true);
+      setCopyFailed(false);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard blocked (insecure context / permission): the URL stays
-      // visible and selectable in the field, so copy-by-hand still works.
+      // Clipboard blocked (insecure context / permission). Don't fail silently
+      // (S4 / FEN-143): pre-select the field so a manual Ctrl/⌘+C is one keypress
+      // away, and surface a visible + announced "copy by hand" hint. The < 2-min
+      // goal hinges on the streamer KNOWING the copy didn't take.
+      urlRef.current?.select();
+      setCopied(false);
+      setCopyFailed(true);
     }
   }
 
@@ -81,11 +89,24 @@ export function BroadcastPage({ slug }: { slug: string }): React.ReactElement {
         {t("studio.broadcast.urlLabel")}
       </label>
       <div style={urlRowStyle}>
-        <input id="obs-url" type="text" readOnly value={obsUrl} style={urlInputStyle} />
+        <input
+          id="obs-url"
+          ref={urlRef}
+          type="text"
+          readOnly
+          value={obsUrl}
+          style={urlInputStyle}
+          onFocus={(e) => e.currentTarget.select()}
+        />
         <button type="button" onClick={() => void copy()} style={copyBtnStyle}>
           {copied ? t("studio.broadcast.copied") : t("studio.broadcast.copy")}
         </button>
       </div>
+      {copyFailed && (
+        <p role="status" aria-live="polite" style={copyHintStyle}>
+          {t("studio.broadcast.copyManual")}
+        </p>
+      )}
 
       {/* Three numbered steps. */}
       <ol style={stepsStyle}>
@@ -132,6 +153,15 @@ const urlRowStyle: React.CSSProperties = {
   display: "flex",
   gap: "0.5rem",
   marginBottom: "1.5rem",
+};
+const copyHintStyle: React.CSSProperties = {
+  color: "#8a5a00",
+  background: "#fff6e5",
+  border: "1px solid #f0d9a8",
+  borderRadius: 8,
+  padding: "0.5rem 0.75rem",
+  margin: "-1rem 0 1.5rem",
+  fontSize: 14,
 };
 const urlInputStyle: React.CSSProperties = {
   flex: 1,

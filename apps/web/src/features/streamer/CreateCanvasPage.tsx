@@ -19,6 +19,7 @@ import { authClient } from "../../auth/auth-client";
 import { Link, navigate } from "../../router.js";
 import { paths } from "../../routes.js";
 import {
+  DEFAULT_SIZE_KEY,
   SIZE_PRESETS,
   buildCreateArgs,
   createErrorKey,
@@ -135,7 +136,11 @@ export function CreateCanvasPage(): React.ReactElement {
                   type="radio"
                   name="size"
                   value={preset.key}
-                  checked={sizeKey === preset.key}
+                  // Show the effective default (Medium) pre-selected so the
+                  // streamer sees the size they'll get, while an untouched
+                  // sizeKey stays undefined → omitted from the args (S2 /
+                  // FEN-143). Picking any radio sets sizeKey and takes over.
+                  checked={(sizeKey ?? DEFAULT_SIZE_KEY) === preset.key}
                   onChange={() => setSizeKey(preset.key)}
                 />
                 <span>
