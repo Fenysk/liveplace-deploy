@@ -30,6 +30,7 @@ import { CanvasRenderer, PALETTE_HEX } from "./renderer.js";
 import { CanvasNetClient, type ConnectionStatus } from "./net.js";
 import { OptimisticPlacement, type PlacementFeedback } from "./placement.js";
 import { BatchSelection, EMPTY_COLOR } from "./selection.js";
+import { OnboardingCoach, createLocalOnboardingStorage, type OnboardingHint } from "./onboarding.js";
 import { gateInteraction, type CanvasInteraction } from "./authGate.js";
 import { TierClaim, inertTierSource, type TierSource } from "./tierClaim.js";
 import { gatewayWsUrl } from "./gateway.js";
@@ -37,6 +38,7 @@ import "./canvas.css";
 
 const DEFAULT_COLOR = 5; // red — a visible default pose colour
 const TOAST_MS = 2600;
+const IDLE_MS = 7000; // hesitation: inactive a few seconds ⇒ offer help (ux-spec §D9)
 
 interface ToastState {
   kind: PlacementFeedback["kind"] | "cap" | "placed";
@@ -113,6 +115,28 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
   const [celebrate, setCelebrate] = useState(false);
   const bumpTier = useCallback(() => setTierVersion((n) => n + 1), []);
 
+  // Adaptive just-in-time onboarding (FEN-118): a behaviour-driven coach decides
+  // which (non-blocking) contextual hint to surface at each funnel step. Implicit
+  // profile detection short-circuits the basics for connaisseurs; "seen" persists.
+  const coachRef = useRef<OnboardingCoach | null>(null);
+  if (coachRef.current === null) {
+    coachRef.current = new OnboardingCoach({ storage: createLocalOnboardingStorage() });
+  }
+  const [hint, setHint] = useState<OnboardingHint | null>(null);
+  const aimedRef = useRef(false); // emit the "aim" funnel event only once
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const emit = useCallback((event: Parameters<OnboardingCoach["send"]>[0]) => {
+    setHint(coachRef.current!.send(event));
+  }, []);
+
+  // Reset the hesitation clock on every meaningful interaction; firing it offers
+  // discreet help (never modal). Connaisseurs are filtered out inside the coach.
+  const bumpActivity = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => emit({ type: "idle" }), IDLE_MS);
+  }, [emit]);
+
   /** Push the staged batch + hovered cell to the renderer and re-render the HUD. */
   const syncOverlay = useCallback(() => {
     rendererRef.current?.setOverlay(selectionRef.current.entries(), hoverRef.current);
@@ -149,14 +173,19 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       if (!requireAccount("stage-cell")) return;
       const c = erasingRef.current ? EMPTY_COLOR : colorRef.current;
       const r = selectionRef.current.apply(x, y, c);
+      bumpActivity();
       if (r.kind === "cap") {
         showToast({ kind: "cap", messageKey: "canvas.feedback.capReached", params: { max: r.cap } });
+        emit({ type: "blocked-attempt" }); // hit a wall ⇒ offer help (ux-spec §D9)
       } else if (r.kind === "locked") {
         showToast({ kind: "banned", messageKey: "canvas.feedback.banned" });
+        emit({ type: "blocked-attempt" });
+      } else {
+        emit({ type: "stage" }); // a productive action graduates the basic hints
       }
       syncOverlay();
     },
-    [requireAccount, showToast, syncOverlay],
+    [requireAccount, showToast, syncOverlay, emit, bumpActivity],
   );
 
   // Commit the whole batch: one place{cid} per cell, reconciled per cid.
@@ -174,10 +203,14 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
     // Light positive acknowledgement of the commit (Peak-End, U7).
     if (cells.length > 0) {
       showToast({ kind: "placed", messageKey: "canvas.feedback.placed", params: { count: cells.length } });
+      // The pixel lands optimistically right now — that's the "aha" moment.
+      emit({ type: "commit" });
+      emit({ type: "placed" });
     }
+    bumpActivity();
     setArmed(null);
     syncOverlay();
-  }, [requireAccount, showToast, syncOverlay]);
+  }, [requireAccount, showToast, syncOverlay, emit, bumpActivity]);
 
   // Express single-pixel path (U1): stage the armed cell AND commit in one tap,
   // so the first mobile pixel is 2 gestures (tap → "Poser ici"). Keeps the batch
@@ -299,11 +332,24 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
             return;
           }
           // Mobile first touch → reveal "Dessiner" for this cell (no accidental pose).
+          // The reveal is the mobile "visée" — the funnel's first-aim moment.
+          if (!aimedRef.current) {
+            aimedRef.current = true;
+            emit({ type: "aim" });
+          }
+          bumpActivity();
           setArmed({ x, y });
         },
         onHover: (cell) => {
           hoverRef.current = cell;
           rendererRef.current?.setOverlay(selectionRef.current.entries(), cell);
+          // Desktop "visée": surface the "how" hint the first time the cursor
+          // frames a cell (the coach de-dups / suppresses for connaisseurs).
+          if (cell && !aimedRef.current) {
+            aimedRef.current = true;
+            emit({ type: "aim" });
+          }
+          if (cell) bumpActivity();
         },
         onScaleClass: setBelowTarget,
         // Keyboard roving cursor (FEN-123): same stage/validate/cancel gestures
@@ -368,10 +414,49 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
       netRef.current = null;
       placementRef.current = null;
     };
-  }, [slug, showToast, stageCell, validate, cancel]);
+  }, [slug, showToast, stageCell, validate, cancel, emit, bumpActivity]);
 
   const onCooldown = gauge !== null && gauge.charges <= 0 && gauge.cooldownUntil > Date.now();
   const cooldownSeconds = onCooldown ? Math.max(0, Math.ceil((gauge!.cooldownUntil - Date.now()) / 1000)) : 0;
+
+  // Onboarding: arrival nudge + start the hesitation clock, once per mount.
+  useEffect(() => {
+    emit({ type: "arrive" });
+    bumpActivity();
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [emit, bumpActivity]);
+
+  // Auto-hide a transient hint (arrival / milestones) after its delay.
+  useEffect(() => {
+    if (!hint || hint.autoHideMs == null) return;
+    const id = setTimeout(() => {
+      coachRef.current?.clearActive();
+      setHint(null);
+    }, hint.autoHideMs);
+    return () => clearTimeout(id);
+  }, [hint]);
+
+  // First empty gauge: turn the wait into anticipation (just-in-time, before the
+  // viewer is surprised by it). Fires on the transition into cooldown.
+  const wasCooldownRef = useRef(false);
+  useEffect(() => {
+    if (onCooldown && !wasCooldownRef.current) {
+      emit({ type: "gauge-empty", params: { seconds: cooldownSeconds } });
+    }
+    wasCooldownRef.current = onCooldown;
+  }, [onCooldown, cooldownSeconds, emit]);
+
+  // First reserve growth (Lot D claim / points threshold): show the causality once.
+  const prevMaxRef = useRef<number | null>(null);
+  useEffect(() => {
+    const max = gauge?.max ?? null;
+    if (max != null && prevMaxRef.current != null && max > prevMaxRef.current) {
+      emit({ type: "gauge-grew", params: { max } });
+    }
+    if (max != null) prevMaxRef.current = max;
+  }, [gauge, emit]);
 
   const sel = selectionRef.current;
   const count = sel.count; // re-read each render; selVersion forces the refresh
@@ -417,9 +502,36 @@ export function CanvasView({ slug = null, tierSource = inertTierSource }: Canvas
         <Link to={paths.gallery()} className="lp-navlink">
           {t("nav.gallery")}
         </Link>
+        {/* "Comment ça marche" stays available (rang 3) so a connaisseur can
+            re-read the core gesture on demand — never blocking (FEN-118). */}
+        <button
+          type="button"
+          className="lp-navlink lp-howto"
+          onClick={() => setHint(coachRef.current!.recall())}
+        >
+          {t("canvas.onboarding.howto")}
+        </button>
         <AuthButton />
         <LanguageSwitcher />
       </div>
+
+      {/* Adaptive onboarding hint — at most one, non-blocking, dismissible when
+          it is a help/recall prompt (FEN-118). */}
+      {hint && (
+        <div className={`lp-onboard lp-onboard--${hint.step}`} role="status">
+          <span className="lp-onboard-text">{t(hint.messageKey, hint.params)}</span>
+          {hint.dismissible && (
+            <button
+              type="button"
+              className="lp-onboard-dismiss"
+              aria-label={t("canvas.onboarding.dismiss")}
+              onClick={() => emit({ type: "dismiss" })}
+            >
+              {t("canvas.onboarding.dismiss")}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="lp-hud">
         <h1>{t("app.title")}</h1>

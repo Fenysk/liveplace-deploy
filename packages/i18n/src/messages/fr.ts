@@ -79,6 +79,16 @@ export const fr: Catalog = {
   "canvas.claim.all": "Tout encaisser ({count})",
   "canvas.claim.celebrate": "Réserve agrandie — {max} pixels !",
 
+  // Onboarding adaptatif just-in-time (FEN-118) — hints contextuels, non bloquants
+  "canvas.onboarding.arrival": "Pose des pixels sur la fresque en direct — essaie !",
+  "canvas.onboarding.aim": "Vise une case, choisis ta couleur",
+  "canvas.onboarding.firstPixel": "Posé ! Tes pixels sont limités — ils se rechargent avec le temps",
+  "canvas.onboarding.gaugeEmpty": "Plus de pixels — recharge dans {seconds}s. Prépare ta prochaine case",
+  "canvas.onboarding.pointsThreshold": "+1 à ta réserve max — ta jauge grandit quand tu joues",
+  "canvas.onboarding.help": "Besoin d'un coup de main ?",
+  "canvas.onboarding.howto": "Comment ça marche",
+  "canvas.onboarding.dismiss": "OK",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profil introuvable",
   "profile.memberSince": "Membre depuis {date}",

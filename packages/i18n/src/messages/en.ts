@@ -83,6 +83,16 @@ export const en = {
   "canvas.claim.all": "Claim all ({count})",
   "canvas.claim.celebrate": "Reserve grown — {max} pixels!",
 
+  // Adaptive just-in-time onboarding (FEN-118) — contextual, non-blocking hints
+  "canvas.onboarding.arrival": "Drop pixels on the live canvas — give it a try!",
+  "canvas.onboarding.aim": "Aim at a cell, pick a colour",
+  "canvas.onboarding.firstPixel": "Placed! Your pixels are limited — they refill over time",
+  "canvas.onboarding.gaugeEmpty": "Out of pixels — refills in {seconds}s. Line up your next cell",
+  "canvas.onboarding.pointsThreshold": "+1 to your max reserve — your gauge grows as you play",
+  "canvas.onboarding.help": "Need a hand?",
+  "canvas.onboarding.howto": "How it works",
+  "canvas.onboarding.dismiss": "Got it",
+
   // Public profile (F11) — consumed by ProfilePage / profileView
   "profile.notFound": "Profile not found",
   "profile.memberSince": "Member since {date}",
