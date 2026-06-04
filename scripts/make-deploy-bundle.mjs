@@ -11,10 +11,15 @@
  *   node scripts/make-deploy-bundle.mjs
  *   # → dist/liveplace-deploy.tar.gz  +  a printed file/secret/build sanity report
  *
- * To publish to a fresh public repo (one-time provisioning, needs git creds):
+ * To publish (one-time provisioning, needs git creds) — prefer `coolify-wire-source.mjs`,
+ * which guards the target. If you publish by hand, the snapshot is PARENTLESS and must
+ * land ONLY on the dedicated public deploy repo, or on a `deploy/*` ref. It must NEVER
+ * touch the canonical `liveplace.git` `main` — that severs the trunk (FEN-179). So:
  *   mkdir /tmp/lp && tar -xzf dist/liveplace-deploy.tar.gz -C /tmp/lp
  *   cd /tmp/lp && git init -b main && git add -A && git commit -m "LivePlace deploy bundle"
- *   git remote add origin <public-repo-url> && git push -u origin main
+ *   git remote add deploy <PUBLIC-DEPLOY-repo-url>   # NOT liveplace.git
+ *   git push -u deploy main                          # or: git push deploy HEAD:deploy/<name>
+ * See docs/adr/0005-deploy-snapshot-vs-canonical-trunk.md and scripts/lib/deploy-guard.mjs.
  *
  * ZERO npm deps: Node ≥ 22 + git.
  */

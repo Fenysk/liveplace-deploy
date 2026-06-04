@@ -13,7 +13,8 @@
  *   2. create the target repo if missing  (POST /user/repos, public)  — idempotent
  *   3. build the secret-free bundle        (scripts/make-deploy-bundle.mjs)
  *   4. extract → fresh git init → commit   (no history, no .env, no secrets)
- *   5. force-push to the repo's main
+ *   5. deploy-guard the target, then force-push to the DEDICATED deploy repo's main
+ *      (guard refuses if the target ever resolves to canonical liveplace.git:main — FEN-180)
  *   6. write COOLIFY_GIT_REPOSITORY into infra/coolify/deploy.env
  *
  * Then `node scripts/coolify-deploy.mjs` finishes the job → ✅ SMOKE PASSED.
@@ -36,6 +37,7 @@ import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { assertSafeDeployPush } from "./lib/deploy-guard.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
@@ -139,6 +141,10 @@ async function main() {
   chmodSync(askpass, 0o700);
   const authUrl = `https://x-access-token@github.com/${owner}/${REPO}.git`;
   git(["remote", "add", "origin", authUrl]);
+  // FEN-180 guard: a parentless deploy snapshot may NEVER force-push to the
+  // canonical `liveplace.git` trunk (the FEN-179 severed-trunk hazard). Fail loud
+  // BEFORE git runs if the resolved target is canonical and not a `deploy/*` ref.
+  assertSafeDeployPush({ remoteUrl: httpsUrl, refspec: "HEAD:main", parentless: true });
   log(`· pushing bundle to ${httpsUrl} (main, force) …`);
   git(["push", "--force", "origin", "HEAD:main"], {
     env: { ...process.env, GIT_ASKPASS: askpass, GH_ASKPASS_TOKEN: TOKEN, GIT_TERMINAL_PROMPT: "0" },
