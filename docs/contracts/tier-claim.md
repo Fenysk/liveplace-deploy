@@ -1,8 +1,12 @@
 # Contract — Claim de palier (Lot D / FEN-116)
 
 Status: **Client mechanic implemented + unit-tested (apps/web `tierClaim.ts`,
-13 cases). Server reframe PENDING — owned by Dev Backend (this doc is the
-contract the client consumes).**
+13 cases). Server reframe IMPLEMENTED (Dev Backend, FEN-130): Convex
+`points.getMyTierProgress` + `points.claimTier` (idempotent by index, no spend),
+the tier curve in `lib/pointsRules.ts` (unit-tested), the atomic charge grant
+`grant.lua` + gateway `/internal/gauge/claim` seam that pushes a `gauge` frame.
+Remaining: wiring `TierSource` → `useQuery`/mutation in the web client (Dev
+Full-stack; the `tierClaim.ts` seam is already in place).**
 Consumers: web CanvasView (Dev Frontend, FEN-116). Producers: Convex `points.ts`
 (Dev Backend reframe). Spec: FEN-83 ux-spec §V2.2 (board decision, Alexis
 2026-06-03) + impl-breakdown Lot D. Supersedes the *spend* model in

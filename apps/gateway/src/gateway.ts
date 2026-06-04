@@ -24,12 +24,18 @@ import {
   type PixelWrite,
   type ServerMessage,
 } from "@canvas/protocol";
-import { DELTA_CHANNEL, DEFAULT_CANVAS_ID } from "@canvas/redis-scripts";
+import { DELTA_CHANNEL, DEFAULT_CANVAS_ID, type GaugeParams } from "@canvas/redis-scripts";
 import { parseDeltaMessage } from "./schema";
 import type { GatewayConfig } from "./config";
 import { ModerationService, IoredisModerationRedis, ModerationRequestError, parseCells } from "./moderation";
 import { createAuthenticator, AuthError, type AuthedUser, type SocketAuthenticator } from "./auth";
-import { SessionGauge, StaticGaugeBonusSource, type GaugeBonusSource } from "./gaugeBonus";
+import {
+  SessionGauge,
+  StaticGaugeBonusSource,
+  IoredisGaugeGrantRunner,
+  type GaugeBonusSource,
+  type GaugeGrantRunner,
+} from "./gaugeBonus";
 import { DeltaCoalescer } from "./coalescer";
 import { SeqRingBuffer } from "./ringBuffer";
 import { TokenBucket } from "./rateLimiter";
@@ -100,6 +106,8 @@ export class Gateway {
   private readonly http: Server;
   private readonly wss: WebSocketServer;
   private readonly moderation: ModerationService;
+  /** Atomic charge-grant on the live gauge for the tier-claim seam (FEN-130). */
+  private readonly gaugeGrant: GaugeGrantRunner;
 
   private flushTimer?: ReturnType<typeof setInterval>;
   private presenceTimer?: ReturnType<typeof setInterval>;
@@ -132,6 +140,7 @@ export class Gateway {
       height: cfg.height,
       paletteSize: PALETTE_SIZE,
     });
+    this.gaugeGrant = new IoredisGaugeGrantRunner(this.redis.cmd);
     this.wireUpgrade();
   }
 
@@ -154,6 +163,7 @@ export class Gateway {
         : path === "/internal/ban" ? this.handleBan
         : path === "/internal/freeze" ? this.handleFreeze
         : path === "/internal/flush" ? this.handleFlush
+        : path === "/internal/gauge/claim" ? this.handleGaugeClaim
         : undefined;
       if (handler) {
         await this.handleModerationRoute(req, res, handler.bind(this));
@@ -235,6 +245,73 @@ export class Gateway {
     // awaited=false: the gateway cannot synchronously await the worker's drain
     // across processes; durability does not depend on it (see ModerationService).
     return { requested, awaited: false };
+  }
+
+  /**
+   * `POST /internal/gauge/claim` — the tier-claim seam (Lot D / FEN-130). Convex
+   * has already applied the durable `gaugeMaxBonus += 1` and computed how many
+   * charges to hand out (`charges`, board default 1). The gateway: (1) re-reads
+   * the bonus so the effective max reflects the just-applied claim, (2) grants
+   * the charges to the live gauge atomically, (3) pushes a `gauge` frame so the
+   * réserve grows in step with the celebration even mid-cooldown. Best-effort by
+   * the same logic as moderation/refresh: if the user has no live socket here the
+   * raised max simply takes effect on their next placement/reconnect.
+   */
+  private async handleGaugeClaim(
+    body: Record<string, unknown>,
+  ): Promise<{ refreshed: number; granted: boolean }> {
+    const userId = body.userId;
+    if (typeof userId !== "string" || userId === "") {
+      throw new ModerationRequestError("missing userId");
+    }
+    const raw = body.charges;
+    // Default to the board's +1; coerce to a non-negative integer (0 ⇒ pure
+    // refresh, e.g. a no-op replay confirming an already-applied tier).
+    const grant =
+      raw === undefined ? 1 : typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+    return this.grantUserCharge(userId, grant);
+  }
+
+  /**
+   * Hand `grant` charges to a user's live gauge and push the post-grant `gauge`
+   * frame to every socket of theirs. The grant hits the SHARED per-user gauge
+   * hash exactly once (not once per socket), then the resulting snapshot fans out
+   * to all the user's connections so multi-tab viewers stay consistent.
+   */
+  async grantUserCharge(userId: string, grant: number): Promise<{ refreshed: number; granted: boolean }> {
+    const conns = [...this.clients].filter((c) => c.user.userId === userId);
+    if (conns.length === 0) return { refreshed: 0, granted: false };
+
+    // Re-resolve the bonus per connection so the effective max reflects the claim
+    // Convex just applied; take the highest in case a socket's resolve lagged.
+    let effMax = this.cfg.gauge.base.gaugeMax;
+    for (const c of conns) {
+      try {
+        await c.gauge.refresh();
+      } catch (err) {
+        console.warn(`[gateway] gauge refresh (claim) failed for ${userId}: ${(err as Error).message}`);
+      }
+      effMax = Math.max(effMax, c.gauge.effectiveGaugeMax);
+    }
+
+    const gaugeParams: GaugeParams = { ...this.cfg.gauge.base, gaugeMax: effMax };
+    let snapshot;
+    try {
+      snapshot = await this.gaugeGrant.grant(userId, gaugeParams, grant, Date.now());
+    } catch (err) {
+      console.warn(`[gateway] gauge grant failed for ${userId}: ${(err as Error).message}`);
+      return { refreshed: conns.length, granted: false };
+    }
+
+    for (const c of conns) {
+      c.sendJson({
+        t: "gauge",
+        charges: snapshot.charges,
+        max: snapshot.max,
+        cooldownUntil: snapshot.cooldownUntil,
+      });
+    }
+    return { refreshed: conns.length, granted: true };
   }
 
   private async handleGaugeRefresh(

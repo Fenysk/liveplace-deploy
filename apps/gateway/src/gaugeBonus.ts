@@ -13,7 +13,21 @@
  *   - cache it for the connection's lifetime,
  *   - expose the effective max the placement path (F5/FEN-15) passes to the Lua,
  *   - re-resolve on demand so a mid-session purchase takes effect (FEN-27 #3).
+ *
+ * It also owns the *charge-grant* half of the tier claim (Lot D / FEN-130): when
+ * Convex confirms a claim it asks the gateway (over `/internal/gauge/claim`) to
+ * hand the viewer the board-default +1 immediately-usable charge so the
+ * celebration is actionable mid-cooldown. That is an atomic `grant.lua` call on
+ * the live gauge hash; the gateway then pushes the post-grant `gauge` frame.
  */
+import type Redis from "ioredis";
+import {
+  GRANT_LUA,
+  grantArgs,
+  parsePeekResult,
+  type GaugeParams,
+  type PeekResult,
+} from "@canvas/redis-scripts";
 
 /**
  * Effective max gauge for a user = canvas base max + purchased bonus. Mirrors
@@ -112,5 +126,54 @@ export class SessionGauge {
     if (this.userId === null) return this.resolvedBonus;
     this.resolvedBonus = await this.source.getGaugeBonus(this.userId);
     return this.resolvedBonus;
+  }
+}
+
+/**
+ * Atomic "grant N charges" on a user's live gauge (tier claim, FEN-130). Injected
+ * into the gateway so the claim seam is unit-tested without a server (the Lua
+ * arithmetic itself is proven by the redis-scripts gauge unit + integration
+ * tests), mirroring placement's PlaceScriptRunner / moderation's ModerationRedis.
+ */
+export interface GaugeGrantRunner {
+  /**
+   * Refill to `nowMs`, add `grant` charges, clamp to `gauge.gaugeMax` (the
+   * EFFECTIVE max the caller already raised), persist, and return the post-grant
+   * snapshot the gateway pushes as a `gauge` frame.
+   */
+  grant(userId: string, gauge: GaugeParams, grant: number, nowMs: number): Promise<PeekResult>;
+}
+
+/**
+ * ioredis-backed grant runner. Loads grant.lua once (SCRIPT LOAD) and runs it via
+ * EVALSHA, reloading + retrying once on NOSCRIPT — same hot-path discipline as
+ * the place/moderation runners.
+ */
+export class IoredisGaugeGrantRunner implements GaugeGrantRunner {
+  private sha?: string;
+
+  constructor(private readonly cmd: Redis) {}
+
+  private get r(): {
+    script: (sub: "LOAD", lua: string) => Promise<string>;
+    evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+  } {
+    return this.cmd as unknown as {
+      script: (sub: "LOAD", lua: string) => Promise<string>;
+      evalsha: (sha: string, numKeys: number, ...args: string[]) => Promise<unknown>;
+    };
+  }
+
+  async grant(userId: string, gauge: GaugeParams, grant: number, nowMs: number): Promise<PeekResult> {
+    const { keys, argv } = grantArgs({ nowMs, gauge, userId, grant });
+    const args = [...keys, ...argv].map(String);
+    if (this.sha === undefined) this.sha = await this.r.script("LOAD", GRANT_LUA);
+    try {
+      return parsePeekResult(await this.r.evalsha(this.sha, keys.length, ...args));
+    } catch (err) {
+      if (!/NOSCRIPT/.test((err as Error).message)) throw err;
+      this.sha = await this.r.script("LOAD", GRANT_LUA);
+      return parsePeekResult(await this.r.evalsha(this.sha, keys.length, ...args));
+    }
   }
 }
