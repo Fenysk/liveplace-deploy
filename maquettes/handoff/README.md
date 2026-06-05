@@ -3,11 +3,12 @@
 Direction retenue par Alexis au gate [FEN-196](/FEN/issues/FEN-196) : **Arcade (« Arcade Fun »)**.
 Ce pack décline Arcade en système complet + écrans signature, prêt à coder.
 
-- **Source maquettes** : `maquettes/` (React 18 + Vite 6 + Tailwind v4, tokens CSS). UI-only, fonts auto-hébergées.
+- **Aperçu permanent (canonique)** : https://fenysk.github.io/liveplace-ui-preview/ (GitHub Pages, always-on — **pas** un tunnel, **pas** la prod). Build Pages = `vite build --base=/liveplace-ui-preview/` → publié par `scripts/publish-preview-pages.mjs` (rail DevOps, FEN-195).
+- **Source maquettes** : `maquettes/` (React 18 + Vite 6 + Tailwind v4, tokens CSS), branche `fen-196-ui-maquettes`. UI-only, fonts auto-hébergées.
 - **Tokens** : `src/styles/tokens.css` (source de vérité) · export JSON `handoff/tokens.arcade.json`.
 - **Direction active** : `data-direction="fun"` sur `<html>`.
 - **SVG** : `handoff/svg/` (favicon, wordmark, twitch, star, lock).
-- **Rendus réels** : `/tmp/arcade/*.png` (joints au ticket).
+- **Rendus réels** : captures 1440×900 + 390×844 jointes au ticket [FEN-204](/FEN/issues/FEN-204).
 
 ---
 
@@ -44,17 +45,36 @@ Le « fun » vit dans le **feedback** (place-pop, confetti, micro-spring), pas d
 
 ---
 
-## 3. Composants (noms alignés sur le code)
+## 3. Inventaire de composants réutilisables (forme imposée par Alexis — FEN-187)
 
-`Button` (variants `primary`/`secondary`/`ghost`, sizes `sm`/`md`/`lg`, props `loading`/`disabled`/`icon`) ·
-`Field` (states default/focus/erreur/désactivé, props `error`/`hint`/`prefix`) ·
-`Toast` (kinds `success`/`info`/`error`) ·
-`StatusPill` (states `open`/`cooldown`/`frozen`/`ended`/`error`) ·
-`Gauge` (modes `ready`/`cooldown`) ·
-`ColorSelector` (radiogroup, double-encodage anneau+check) ·
-`Wordmark` · `FrescoCanvas` · `TwitchGlyph`.
+**Règle d'architecture (condition de passation) :** le dev est structuré en **composants réutilisables**, pas en écrans monolithiques. **Un composant = une seule définition** couvrant tous ses états/variants. Aucune valeur en dur : couleurs/typo/espacements/rayons/motion viennent **exclusivement des tokens**. Un écran = une **composition** de ces composants (cf. §3.2), jamais une réimplémentation locale.
 
-Règle système : **une seule** implémentation par composant. Pas de variante « presque pareille ». Tout passe par tokens, jamais de valeur en dur.
+### 3.1 Atomes / molécules (réutilisables)
+
+| Composant | Fichier | Props | Variants | États | Tokens consommés (source unique) |
+|---|---|---|---|---|---|
+| **Button** | `components/ui/Button.jsx` | `variant`, `size`, `loading`, `disabled`, `icon`, `children` | `primary` · `secondary` · `ghost` ; tailles `sm`/`md`/`lg` | default · hover · focus-visible · active · `loading` (spinner) · `disabled` | `--accent`/`-hover`/`-active`, `--accent-onAccent`, `--ui-surface`, `--ui-border-strong`, `--da-radius-control`, `--da-elev-control`, `--focus-ring`, `--dur-fast`/`--ease-out` |
+| **Field** | `components/ui/Field.jsx` | `label`, `value`, `placeholder`, `hint`, `error`, `disabled`, `type`, `prefix`, `state` | input texte (extensible number/email via `type`) | default · `focus` · erreur (`error`) · `disabled` | `--ui-surface-raised`, `--ui-border-strong`, `--accent-ring`, `--status-error-fg`, `--da-radius-control`, `--text-base`, `--ui-text*` |
+| **Toast** | `components/ui/Toast.jsx` | `kind`, `title`, `children` | — | `success` · `info` · `error` | `--status-*-fg/bg`, `--ui-surface-raised`, `--ui-border`, `--da-radius-card`, `--elev-3` |
+| **StatusPill** | `components/StatusPill.jsx` | `state`, `label` | — | `open` · `cooldown` · `frozen` · `ended` · `error` (icône + label, jamais couleur seule) | `--status-*-fg/bg`, `--radius-pill`, `--text-xs` |
+| **Gauge** | `components/Gauge.jsx` | `mode`, `ready`, `max`, `seconds`, `nextLabel` | `ready` (réserve segmentée) · `cooldown` (anneau + compte à rebours tnum) | reflète l'état de pose | `--accent`, `--accent-soft`, `--status-cooldown-fg`, `--radius-md`, `--ui-text`, `.tnum` |
+| **ColorSelector** | `components/ColorSelector.jsx` | `value`, `onChange`, `compact` | grille standard / `compact` | par swatch : default · selected (anneau + check + label, lisible N&B) · active | `--radius-sm`, `--select-ring`, `--ui-surface`, palette `data/fresco.js` (hex exacts, **aucune teinte/opacité** — fidélité couleur) |
+| **Wordmark** | `components/Wordmark.jsx` | `size` (`sm`/`md`/`lg`) | — | — | `--accent`, `--accent-onAccent`, `--font-display` (Press Start 2P en Arcade) |
+| **TwitchGlyph** | `components/ui/TwitchGlyph.jsx` | `size`, `className` | — | hérite `currentColor` | — (SVG mono, recolorable) |
+| **FrescoCanvas** | `components/FrescoCanvas.jsx` | `cell`, `reticle`, `placedFx` | — | rendu fresque + réticule + place-pop | `--canvas-field`/`-checker`/`-grid`/`-frame`, `.lp-pop`/`.lp-ping` |
+
+### 3.2 Compositions d'écran (assemblent les atomes, non réutilisables tels quels)
+
+| Écran | Fichier | Réutilise |
+|---|---|---|
+| Canvas viewer | `components/CanvasViewer.jsx` | Wordmark, StatusPill, Gauge, ColorSelector, Button, FrescoCanvas |
+| Onboarding + Twitch | `screens/Onboarding.jsx` | Wordmark, Button (+ TwitchGlyph), FrescoCanvas |
+| Dashboard créateur | `screens/Dashboard.jsx` | Wordmark, StatusPill, Field, Button |
+| Célébration | `screens/Celebration.jsx` | Wordmark, Button, FrescoCanvas (+ confetti tokenisé) |
+| Vue OBS | `screens/ObsView.jsx` | FrescoCanvas (+ `--elev-obs`) |
+| Planche d'états | `screens/StatesBoard.jsx` | tous les atomes ci-dessus (référence vivante) |
+
+**Règle système :** **une seule** implémentation par composant. Pas de variante « presque pareille » — étendre via props/variants existants. Tout passe par tokens, jamais de valeur en dur.
 
 ---
 
@@ -128,12 +148,20 @@ Animations signature : `lp-place-pop` (pose), `lp-ring-ping`, `lp-confetti-fall`
 
 ---
 
-## 8. Critères d'acceptation (handoff)
+## 8. Critères d'acceptation côté dev (« réutilise composant X, tokens Y »)
 
-1. `data-direction="fun"` pilote 100% du look via tokens (aucune valeur en dur dans les composants).
-2. Les 5 écrans signature rendent en mobile **et** desktop, fidèles aux captures jointes.
-3. Tous les contrastes du §5 mesurés AA dans l'implémentation finale.
-4. Focus visible au clavier sur chaque élément interactif ; cibles ≥44px sur tactile.
-5. `prefers-reduced-motion` neutralise les animations sans perte d'information.
-6. Vue OBS : fond réellement transparent + contour `--elev-obs` lisible sur fond clair, foncé et IRL.
-7. Tokens consommés depuis `tokens.css` / `tokens.arcade.json` ; SVG depuis `handoff/svg/`.
+Forme imposée par Alexis : chaque critère pointe un **composant réutilisable** + ses **tokens**, pas une description libre.
+
+| # | Critère (vérifiable) |
+|---|---|
+| AC1 | **Architecture composants** : chaque atome du §3.1 existe en **une seule** définition couvrant tous ses états/variants ; les écrans du §3.2 les **importent** (zéro réimplémentation locale, zéro variante « presque pareille »). |
+| AC2 | **CTA / actions** : tout bouton = `Button` (`variant`+`size`), jamais un `<button>` stylé à la main. Primaire sous texte blanc = `--accent` ; focus = `--focus-ring`. |
+| AC3 | **Saisies** : tout champ = `Field`, états `error`/`disabled`/focus via props/tokens (`--accent-ring`, `--status-error-fg`) — pas de bordure en dur. |
+| AC4 | **État de canvas** = `StatusPill` (5 états) + `Gauge` (`ready`/`cooldown`) ; icône+label obligatoires (lisible N&B), `--status-*` tokens. |
+| AC5 | **Couleurs de pose** = `ColorSelector` ; swatch = hex exact de la palette, **aucune teinte/opacité** (fidélité couleur). |
+| AC6 | **Tokens = source unique** : aucune couleur/typo/espacement/rayon/durée en dur ; tout vient de `tokens.css` / `tokens.arcade.json`. `data-direction="fun"` pilote 100% du look. Coral-texte = `--accent-text`, jamais `#ef4d3a`. |
+| AC7 | **A11y** : contrastes §5 AA dans l'implémentation finale ; focus visible clavier partout ; cibles ≥44px (Button md/lg, Field). |
+| AC8 | **Motion** : durées/courbes via tokens `--dur-*`/`--ease-*` ; `prefers-reduced-motion` neutralise sans perte d'info. |
+| AC9 | **Vue OBS** : `ObsView` rend un fond réellement transparent + contour `--elev-obs` lisible sur fond clair/foncé/IRL. |
+| AC10 | **Rendu réel** : les 6 surfaces rendent en **1440×900** et **390×844**, fidèles aux captures jointes. |
+| AC11 | **Assets** : wordmark/favicon/icônes depuis `handoff/svg/` ; police display (Press Start 2P) **uniquement** wordmark + titre de moment. |
