@@ -33,7 +33,7 @@
 
   /* Functional status hues (kept constant across directions for learnability).
      Each is AA on light surfaces and is always paired with an icon/label (§6). */
-  --green-500:#1f9d57;  --green-100:#dcf3e4;
+  --green-500:#198547;  --green-100:#dcf3e4;  /* darkened: AA on green-100 (4.0:1) */
   --amber-500:#b06f00;  --amber-100:#fbeccb;
   --red-500:  #c2371d;  --red-100:  #fbe3dd;
   --blue-500: #2563c9;  --blue-100: #dde9fb;
@@ -132,6 +132,7 @@
   --accent:        #4b4ea6;            /* restrained indigo, identifiable      */
   --accent-hover:  #3f4190;
   --accent-active: #353877;
+  --accent-text:   var(--accent);      /* accent-as-text; overridden per direction */
   --accent-soft:   #e6e6f4;
   --accent-ring:   #8385d6;
   --accent-onAccent: var(--gray-0);
@@ -163,11 +164,15 @@
    = Press Start 2P for the wordmark ONLY (never body — perf + legibility). */
 [data-direction="fun"] {
   --font-display: "Press Start 2P", "Inter", system-ui, sans-serif;
-  --accent:        #ef4d3a;            /* coral — rare in default game palettes */
-  --accent-hover:  #d83e2d;
-  --accent-active: #bd3221;
+  /* Coral, AA-tuned: white text on --accent = 4.7:1 (passes AA normal text on
+     buttons), and --accent on light bg = 3.8:1 (passes AA graphics). The bright
+     show-coral #ef4d3a is reserved for decorative-only moments (never text). */
+  --accent:        #d6381f;
+  --accent-hover:  #c0331b;
+  --accent-active: #a82d18;
+  --accent-text:   #bd3221;            /* coral-as-TEXT/icon on light: AA 4.5:1+ */
   --accent-soft:   #fde3df;
-  --accent-ring:   #f5897a;
+  --accent-ring:   #d6381f;            /* focus indicator: ≥3:1 on light (4.7:1) */
   --accent-2:      #f4a020;            /* amber support / points / celebration  */
   --da-radius-control: var(--radius-xs);   /* squarer = pixel feel              */
   --da-radius-card:    var(--radius-sm);

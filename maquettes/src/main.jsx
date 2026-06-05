@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles/base.css";
 import App from "./App.jsx";
 
-document.documentElement.setAttribute("data-direction", "sobre");
+document.documentElement.setAttribute("data-direction", "fun"); // Arcade = direction retenue (FEN-196)
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <App />
