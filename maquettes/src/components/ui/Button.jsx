@@ -7,11 +7,22 @@ const base =
   "duration-[var(--dur-fast)] ease-[var(--ease-out)] select-none active:scale-[.98] " +
   "focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45";
 
+// FEN-288 ruling — touch-target floor:
+//  • md (44px) is the canonical touch floor (var(--target-min), §5.4 + WCAG 2.5.5).
+//    Use md or lg for any primary/standalone action on a mobile/touch surface.
+//  • sm (36px visual) is a POINTER/DESKTOP-DENSITY variant (toolbars, dense
+//    tables, secondary actions beside a larger target). It is NOT a standalone
+//    touch primary. To stay honest when it can still be tapped, sm expands its
+//    interactive hit area to ≥44px in the block axis via an invisible ::before
+//    overlay — the visual box stays 36px, the tappable region meets the floor.
+//    Block-axis only: inline expansion would overlap horizontally-adjacent
+//    buttons. Adjacent dense sm buttons additionally satisfy WCAG 2.5.8 spacing.
 const sizes = {
-  // min-height respects ≥44px touch targets (§5.4).
   lg: "min-h-[48px] px-5 text-[var(--text-base)]",
-  md: "min-h-[44px] px-4 text-[var(--text-sm)]",
-  sm: "min-h-[36px] px-3 text-[var(--text-sm)]",
+  md: "min-h-[var(--target-min)] px-4 text-[var(--text-sm)]",
+  sm:
+    "relative min-h-[36px] px-3 text-[var(--text-sm)] " +
+    "before:absolute before:content-[''] before:inset-x-0 before:-inset-y-1",
 };
 
 const variants = {

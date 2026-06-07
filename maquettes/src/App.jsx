@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import CanvasViewer from "./components/CanvasViewer.jsx";
+import MobileRefonte from "./screens/MobileRefonte.jsx";
 import Onboarding from "./screens/Onboarding.jsx";
 import Dashboard from "./screens/Dashboard.jsx";
 import Celebration from "./screens/Celebration.jsx";
@@ -20,6 +21,7 @@ const DIRECTIONS = [
 ];
 
 const SURFACES = [
+  { id: "refonte",     label: "Refonte mobile", vp: false, render: () => <MobileRefonte /> },
   { id: "viewer",      label: "Canvas viewer",  vp: true,  render: (vp, st) => <CanvasViewer viewport={vp} placeState={st} /> },
   { id: "onboarding",  label: "Onboarding",     vp: true,  render: (vp) => <Onboarding viewport={vp} /> },
   { id: "dashboard",   label: "Dashboard",      vp: true,  render: (vp) => <Dashboard viewport={vp} /> },
@@ -50,7 +52,7 @@ function Segmented({ options, value, onChange, label }) {
 
 export default function App() {
   const [direction, setDirection] = useState("fun");   // Arcade = retenue
-  const [surface, setSurface] = useState("viewer");
+  const [surface, setSurface] = useState("refonte");   // FEN-337 deliverable lands first
   const [viewport, setViewport] = useState("desktop");
   const [placeState, setPlaceState] = useState("ready");
 

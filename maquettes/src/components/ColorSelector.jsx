@@ -3,7 +3,18 @@ import { PALETTE } from "../data/fresco.js";
 // Color selector — the §5.1 color-fidelity proof: each swatch paints the EXACT
 // palette hex at full opacity (no tint/opacity), so the swatch == the pixel.
 // Selection is double-encoded (ring + check + bold label, legible in greyscale,
-// §6) — never color-alone. Targets ≥44px on touch (§5.4).
+// §6) — never color-alone.
+//
+// FEN-288 ruling — swatch touch target is a DELIBERATE WCAG 2.5.8 (AA) case,
+// NOT the 44px AAA floor. A 44px solid swatch is infeasible here: (1) it floods
+// the neutral UI with 16 blocks of arbitrary hue, breaking §5.1 chromatic
+// neutrality / canvas-is-king; (2) the 8-col grid (a frozen UX structure) can't
+// fit 44px cells on mobile without horizontal scroll or hiding colors. The
+// painted fill stays at design size (36px default / 32px compact) and fills its
+// grid cell (~40px on desktop). With the 1.5 (6px) gap, targets are ≥32px with
+// ≥6px separation → satisfies WCAG 2.5.8 AA (≥24px target, ≥24px center spacing)
+// while preserving exact fidelity. We knowingly forgo AAA 2.5.5 for this control
+// only; var(--target-min-aa) documents the floor that applies.
 export default function ColorSelector({ value, onChange, compact = false }) {
   return (
     <div>

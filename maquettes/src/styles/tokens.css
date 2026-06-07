@@ -51,6 +51,13 @@
   --space-12:48px;
   --space-16:64px;
 
+  /* Touch-target floor (FEN-288 ruling). --target-min is the canonical mobile
+     tap target (WCAG 2.5.5 AAA + cadrage §5.4). --target-min-aa is the AA floor
+     (WCAG 2.5.8) used only where 44px solid is infeasible AND the spacing
+     exception is met — currently only the ColorSelector swatch grid. */
+  --target-min:    44px;
+  --target-min-aa: 24px;
+
   /* Type scale — 2 weights cover most of the UI; 3 active sizes per context. */
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-sans);   /* overridden per direction */
