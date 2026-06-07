@@ -1,64 +1,14 @@
 <!doctype html>
 <html lang="fr">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>LivePlace — Aperçu maquettes (test-liveplace.nas)</title>
-    <style>
-      :root { color-scheme: dark; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0; min-height: 100vh; display: grid; place-items: center;
-        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        color: #e7e9ee;
-        background: radial-gradient(1200px 600px at 50% -10%, #2a2150 0%, #0d0c1d 55%, #07060f 100%);
-      }
-      main { width: min(680px, 90vw); padding: 2.5rem; text-align: center; }
-      .badge {
-        display: inline-block; padding: .35rem .8rem; border-radius: 999px;
-        font-size: .8rem; letter-spacing: .04em; text-transform: uppercase;
-        background: #3a2d6b; color: #c9bdff; border: 1px solid #5a47a8;
-      }
-      h1 { font-size: clamp(1.8rem, 5vw, 2.8rem); margin: 1.2rem 0 .4rem; }
-      h1 .px { color: #9d7bff; }
-      p { color: #aab; margin: .4rem 0; }
-      .grid {
-        display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px;
-        width: 180px; margin: 1.8rem auto; aspect-ratio: 1;
-      }
-      .grid i { border-radius: 3px; background: #1c1838; animation: pulse 3s infinite ease-in-out; }
-      .grid i:nth-child(3n) { background: #6a4fd0; }
-      .grid i:nth-child(5n) { background: #c94fd0; }
-      .grid i:nth-child(7n) { background: #4fb6d0; }
-      @keyframes pulse { 0%,100% { opacity:.5 } 50% { opacity:1 } }
-      .meta { margin-top: 2rem; font-size: .85rem; color: #6c6c8a; }
-      code { background: #161430; padding: .1rem .4rem; border-radius: 4px; color: #c9bdff; }
-      a { color: #9d7bff; }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <title>LivePlace — Maquettes UI (preview local)</title>
+    <script type="module" crossorigin src="/liveplace-ui-preview/assets/index-kwPXKur7.js"></script>
+    <link rel="stylesheet" crossorigin href="/liveplace-ui-preview/assets/index-CVtnuUIf.css">
   </head>
   <body>
-    <main>
-      <span class="badge">Aperçu local · hors production</span>
-      <div class="grid" aria-hidden="true">
-        <!-- 64 placeholder pixels -->
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-      </div>
-      <h1>Live<span class="px">Place</span> — aperçu maquettes</h1>
-      <p>Placeholder servi sur <code>test-liveplace.nas</code>.</p>
-      <p>Cet aperçu est <strong>indépendant de la production</strong> (pas Coolify, pas liveplace.tv).</p>
-      <p class="meta">
-        Les maquettes de l'UI Designer remplacent cette page dès le prochain build.<br />
-        Flux de mise à jour : <code>scripts/preview-nas.sh update</code> · runbook :
-        <code>docs/runbooks/preview-nas.md</code>
-      </p>
-    </main>
+    <div id="root"></div>
   </body>
 </html>

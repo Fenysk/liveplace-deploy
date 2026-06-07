@@ -128,6 +128,18 @@
   --select-ring:   var(--ui-text);
   --select-check:  var(--ui-text);
 
+  /* ---- R2 mobile interaction (FEN-368) ----------------------------------
+     Bottom-panel open/close + free pan + extended zoom-out. All bounds are
+     tokens so Dev Frontend never hardcodes a height/ratio/z-index (Alexis). */
+  --z-dock:   30;                 /* open bottom panel                        */
+  --z-fab:    40;                 /* reopen FAB when panel closed (over dock) */
+  --z-toast:  50;                 /* toasts/celebration stay above the FAB    */
+  --dock-max-h:     60vh;         /* panel ceiling: canvas keeps ≥ ~40% (F6)  */
+  --dock-snap-ratio: 0.25;        /* drag past ¼ panel height ⇒ close/open    */
+  --pan-overscroll-min: 0.2;      /* A3: ≥20% of fresco always on-screen      */
+  --fab-size:  var(--target-min); /* reopen pastille = 44px touch floor       */
+  --zoom-btn:  var(--target-min); /* zoom +/−/fit buttons = 44px              */
+
   /* ---- 3. SEMANTIC STATUS ------------------------------------------------- */
   --status-open-fg:   var(--green-500); --status-open-bg:   var(--green-100);
   --status-cooldown-fg:var(--amber-500);--status-cooldown-bg:var(--amber-100);
