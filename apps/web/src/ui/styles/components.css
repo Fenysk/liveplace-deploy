@@ -1,0 +1,882 @@
+/*
+ * Arcade component library styles (FEN-268, Lot 0 — §3 handoff).
+ *
+ * One class-set per reusable component, covering ALL states/variants. Every
+ * value reads a token from `tokens.css` — zero hard-coded colours/space/radius/
+ * duration (AC6). React components in `src/ui/*.tsx` are thin wrappers that map
+ * props → these classes (see `variants.ts` for the pure, unit-tested mapping).
+ *
+ * Prefix `ui-` (the shared design system) keeps these distinct from the legacy
+ * `lp-` screen classes (canvas.css), which the screen lots migrate onto these.
+ */
+
+/* ====================================================================== */
+/* Focus — visible everywhere (AC7). 2px AA ring via --focus-ring.        */
+/* ====================================================================== */
+.ui-focusable:focus-visible,
+.ui-btn:focus-visible,
+.ui-field__control:has(.ui-field__input:focus-visible),
+.ui-swatch:focus-visible,
+.ui-toast__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ====================================================================== */
+/* Button (AC2) — variant × size × {default,hover,active,focus,loading,   */
+/* disabled}. Primary = --accent under white text. md/lg ≥44/48px.        */
+/* ====================================================================== */
+.ui-btn {
+  --_btn-bg: var(--accent);
+  --_btn-fg: var(--accent-on-accent);
+  --_btn-bg-hover: var(--accent-hover);
+  --_btn-bg-active: var(--accent-active);
+  --_btn-border: transparent;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  border: 1px solid var(--_btn-border);
+  border-radius: var(--da-radius-control);
+  background: var(--_btn-bg);
+  color: var(--_btn-fg);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+  box-shadow: var(--da-elev-control);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.ui-btn:hover {
+  background: var(--_btn-bg-hover);
+}
+.ui-btn:active {
+  background: var(--_btn-bg-active);
+  transform: translateY(1px) scale(calc(1 - 0.01 * var(--da-motion-scale)));
+}
+
+/* sizes — ≥44px hit area on md/lg (AC7) */
+.ui-btn--sm {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+.ui-btn--md {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-base);
+}
+.ui-btn--lg {
+  min-height: 48px;
+  padding: 0 var(--space-6);
+  font-size: var(--text-lg);
+}
+
+/* variants */
+.ui-btn--secondary {
+  --_btn-bg: var(--ui-surface-raised);
+  --_btn-fg: var(--ui-text);
+  --_btn-bg-hover: var(--gray-50);
+  --_btn-bg-active: var(--gray-100);
+  --_btn-border: var(--ui-border-strong);
+}
+.ui-btn--ghost {
+  --_btn-bg: transparent;
+  --_btn-fg: var(--accent-text);
+  --_btn-bg-hover: var(--accent-soft);
+  --_btn-bg-active: var(--accent-soft);
+  --_btn-border: transparent;
+  box-shadow: none;
+}
+
+/* states */
+.ui-btn:disabled,
+.ui-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+.ui-btn[data-loading="true"] {
+  cursor: progress;
+  color: transparent;
+}
+.ui-btn__spinner {
+  position: absolute;
+  width: 1.1em;
+  height: 1.1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: var(--radius-pill);
+  color: var(--_btn-fg);
+  animation: ui-spin 0.7s linear infinite;
+}
+.ui-btn {
+  position: relative;
+}
+
+/* ====================================================================== */
+/* Field (AC3) — label + input + hint/error. focus/error/disabled.        */
+/* ====================================================================== */
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-family: var(--font-sans);
+}
+.ui-field__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ui-text-secondary);
+}
+/* The border/background/radius live on the CONTROL, not the input, so a prefix
+   can sit IN FLOW before a borderless input — the input then clears any prefix
+   width automatically (a fixed padding-left can't fit "https://"; FEN-276). */
+.ui-field__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--da-radius-control);
+  background: var(--ui-surface-raised);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.ui-field__prefix {
+  flex: none;
+  padding-left: var(--space-3);
+  color: var(--ui-text-tertiary);
+  font-size: var(--text-base);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.ui-field__input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--da-radius-control);
+  background: transparent;
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+}
+.ui-field__input::placeholder {
+  color: var(--ui-text-tertiary);
+}
+/* With the prefix in flow, the input only needs a small gap after it. */
+.ui-field__control[data-prefix="true"] .ui-field__input {
+  padding-left: var(--space-1);
+}
+.ui-field__control:focus-within {
+  border-color: var(--accent-ring);
+}
+.ui-field[data-state="error"] .ui-field__control {
+  border-color: var(--status-error-fg);
+}
+.ui-field[data-state="disabled"] .ui-field__control {
+  opacity: 0.5;
+  background: var(--ui-surface);
+}
+.ui-field__input:disabled {
+  cursor: not-allowed;
+}
+.ui-field__hint {
+  font-size: var(--text-xs);
+  color: var(--ui-text-tertiary);
+}
+.ui-field__error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--status-error-fg);
+}
+.ui-field__error::before {
+  content: "!";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--status-error-fg);
+  color: var(--gray-0);
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+}
+
+/* ====================================================================== */
+/* Toast — success/info/error. Icon + label (never colour-only).          */
+/* ====================================================================== */
+.ui-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 360px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--ui-border);
+  border-left-width: 4px;
+  border-radius: var(--da-radius-card);
+  background: var(--ui-surface-raised);
+  box-shadow: var(--elev-3);
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+}
+.ui-toast__icon {
+  flex: none;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--weight-bold);
+}
+.ui-toast__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ui-toast__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.ui-toast__msg {
+  font-size: var(--text-sm);
+  color: var(--ui-text-secondary);
+}
+.ui-toast--success {
+  border-left-color: var(--status-open-fg);
+}
+.ui-toast--success .ui-toast__icon {
+  color: var(--status-open-fg);
+}
+.ui-toast--info {
+  border-left-color: var(--status-frozen-fg);
+}
+.ui-toast--info .ui-toast__icon {
+  color: var(--status-frozen-fg);
+}
+.ui-toast--error {
+  border-left-color: var(--status-error-fg);
+}
+.ui-toast--error .ui-toast__icon {
+  color: var(--status-error-fg);
+}
+.ui-toast__close {
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+}
+
+/* ====================================================================== */
+/* StatusPill (AC4) — 5 states; icon + label, never colour alone.         */
+/* ====================================================================== */
+.ui-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-lh);
+  font-weight: var(--weight-semibold);
+}
+.ui-pill__icon {
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+.ui-pill--open {
+  color: var(--status-open-fg);
+  background: var(--status-open-bg);
+}
+.ui-pill--cooldown {
+  color: var(--status-cooldown-fg);
+  background: var(--status-cooldown-bg);
+}
+.ui-pill--frozen {
+  color: var(--status-frozen-fg);
+  background: var(--status-frozen-bg);
+}
+.ui-pill--ended {
+  color: var(--status-ended-fg);
+  background: var(--status-ended-bg);
+}
+.ui-pill--error {
+  color: var(--status-error-fg);
+  background: var(--status-error-bg);
+}
+
+/* ====================================================================== */
+/* Gauge (AC4) — ready (horizontal bars) · cooldown (ring + tnum count). */
+/* ====================================================================== */
+.ui-gauge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+}
+
+/* Ready mode: horizontal bar track (B1, FEN-418). Two layers: total (gray
+   track background) + available (accent fill). Optional third animated
+   projection bar when a batch is staged (B2/B3). */
+.ui-gauge[data-mode="bar"] {
+  width: 100%;
+}
+.ui-gauge__track {
+  --_fill: 0;
+  --_proj: 0;
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: var(--accent-soft); /* total capacity */
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.ui-gauge__fill {
+  position: absolute;
+  inset: 0;
+  right: auto;
+  width: calc(var(--_fill) * 100%);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: width var(--dur-base) var(--ease-out);
+}
+/* Projection bar (B2/B3): pixels remaining after the staged pose.
+   Drawn on top of fill, slightly transparent, with a light border so the
+   "spending zone" (fill minus projection) reads as the pixels being spent.
+   Animation is opt-in under prefers-reduced-motion (B3). */
+.ui-gauge__proj {
+  position: absolute;
+  inset: 0;
+  right: auto;
+  width: calc(var(--_proj) * 100%);
+  background: var(--accent);
+  opacity: 0.85;
+  border-radius: var(--radius-pill);
+  outline: 1px solid color-mix(in srgb, var(--accent-soft) 80%, white 20%);
+  outline-offset: -1px;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-gauge__proj {
+    animation: ui-gauge-proj calc(1200ms / max(var(--da-motion-scale), 0.001))
+      var(--ease-in-out) infinite;
+  }
+  @keyframes ui-gauge-proj {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1.0; }
+  }
+}
+/* Reduced-motion fallback: dashed outline instead of animation (D-B). */
+@media (prefers-reduced-motion: reduce) {
+  .ui-gauge__proj {
+    outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+    outline-offset: -1px;
+  }
+}
+.ui-gauge__ring {
+  --_pct: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  background: conic-gradient(
+    var(--status-cooldown-fg) calc(var(--_pct) * 1%),
+    var(--status-cooldown-bg) 0
+  );
+  display: inline-grid;
+  place-items: center;
+}
+.ui-gauge__ring::after {
+  content: "";
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  background: var(--ui-surface-raised);
+}
+.ui-gauge__count {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-weight: var(--weight-semibold);
+  color: var(--status-cooldown-fg);
+}
+.ui-gauge__label {
+  font-size: var(--text-sm);
+  color: var(--ui-text-secondary);
+}
+
+/* Cooldown anticipation ramp (FEN-169/171 folded into the design-system Gauge).
+   Phase is carried by a LEFT-ACCENT + WEIGHT + HUE on the count, so the three
+   rungs stay distinguishable in greyscale / for colour-blind users (AC7) — never
+   hue alone. Token-only (AC6); the parked craft's hardcoded dark hexes are
+   replaced by the Arcade status families: warm amber for the cooling rungs (the
+   cooldown-toast family), calm "go" green for the refill (the success family).
+   It reads as escalating anticipation, never urgent/error red. */
+.ui-gauge[data-phase] {
+  padding-left: var(--space-2);
+  border-left: 3px solid transparent;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    border-width var(--dur-fast) var(--ease-out);
+}
+.ui-gauge[data-phase="waiting"] {
+  border-left-color: var(--status-cooldown-bg);
+}
+.ui-gauge[data-phase="waiting"] .ui-gauge__count {
+  color: var(--status-cooldown-fg);
+  font-weight: var(--weight-semibold);
+}
+.ui-gauge[data-phase="armed"] {
+  border-left-width: 4px;
+  border-left-color: var(--accent-2);
+}
+.ui-gauge[data-phase="armed"] .ui-gauge__count {
+  color: var(--status-cooldown-fg);
+  font-weight: var(--weight-bold);
+}
+.ui-gauge[data-phase="ready"] {
+  border-left-width: 4px;
+  border-left-color: var(--status-open-fg);
+}
+.ui-gauge[data-phase="ready"] .ui-gauge__count {
+  color: var(--status-open-fg);
+  font-weight: var(--weight-bold);
+}
+/* A sober "go" pulse on the left-accent draws the eye to the confirm gesture —
+   anticipation, not alarm. Opt-in: the weight/hue cues above stand alone, so
+   reduced-motion simply drops it (AC8). Scaled by --da-motion-scale like every
+   signature animation. */
+@media (prefers-reduced-motion: no-preference) {
+  .ui-gauge[data-phase="ready"] {
+    animation: ui-cooldown-go calc(1600ms / max(var(--da-motion-scale), 0.001))
+      var(--ease-in-out) infinite;
+  }
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ====================================================================== */
+/* ReserveMeter (FEN-338) — bounded pose reserve: count pastille + capped  */
+/* bar. THE overflow fix: footprint is identical for every N (only the     */
+/* fill varies), so the dock never scrolls horizontally (AC-1/AC-2). All   */
+/* token-only (AC-5).                                                      */
+/* ====================================================================== */
+.ui-reserve {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  /* The whole meter is bounded to its container; the body flexes and the bar
+     clips its fill, so nothing can spill past the edge whatever the count. */
+  min-width: 0;
+}
+.ui-reserve__count {
+  flex: none;
+  /* Fixed width (2-digit slot, tabular figures): 20 and 40 occupy the SAME
+     box — the count never reflows the row. */
+  min-width: 2.25em;
+  text-align: center;
+  padding: var(--space-1) var(--space-2);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--da-radius-control);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-lg);
+  line-height: 1.1;
+}
+.ui-reserve__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ui-reserve__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.ui-reserve__label {
+  color: var(--ui-text);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-reserve__cap {
+  flex: none;
+  color: var(--ui-text-secondary);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+}
+.ui-reserve__bar {
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ui-text) 12%, transparent);
+  overflow: hidden;
+}
+.ui-reserve__fill {
+  display: block;
+  height: 100%;
+  width: var(--_fill, 0%);
+  max-width: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width var(--dur-base) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-reserve__fill {
+    transition: none;
+  }
+}
+
+/* ====================================================================== */
+/* ColorSelector (AC5) — swatch grid. Selected = ring + check + label,    */
+/* legible in B&W. Swatch fill = EXACT palette hex (no tint/opacity).     */
+/* ====================================================================== */
+.ui-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  gap: var(--space-2);
+}
+.ui-swatches[data-compact="true"] {
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: var(--space-1);
+}
+.ui-swatch {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0;
+}
+.ui-swatches[data-compact="true"] .ui-swatch {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+}
+.ui-swatch[data-selected="true"] {
+  box-shadow:
+    0 0 0 2px var(--ui-surface-raised),
+    0 0 0 4px var(--accent-ring);
+}
+.ui-swatch__check {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--gray-0);
+  mix-blend-mode: difference;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+}
+
+/* Eraser swatch (FEN-418 A7): auto-width, icon + label, neutral surface. */
+.ui-swatch[data-eraser="true"] {
+  width: auto;
+  min-width: 36px;
+  padding: 0 var(--space-3);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+.ui-swatch__eraser-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+/* The check on eraser is absolute-positioned, so visually overlap the icon. */
+.ui-swatch[data-eraser="true"] .ui-swatch__check {
+  position: static;
+  mix-blend-mode: normal;
+  color: var(--accent);
+}
+
+/* ====================================================================== */
+/* Wordmark / brand — Press Start 2P display face (AC11).                  */
+/* ====================================================================== */
+.ui-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  color: var(--ui-text);
+  line-height: 1;
+}
+.ui-wordmark__mark {
+  flex: none;
+  display: inline-block;
+  background: var(--accent-show);
+  border-radius: var(--da-radius-control);
+}
+.ui-wordmark__accent {
+  color: var(--accent-text);
+}
+.ui-wordmark--sm {
+  font-size: var(--text-sm);
+}
+.ui-wordmark--sm .ui-wordmark__mark {
+  width: 16px;
+  height: 16px;
+}
+.ui-wordmark--md {
+  font-size: var(--text-lg);
+}
+.ui-wordmark--md .ui-wordmark__mark {
+  width: 22px;
+  height: 22px;
+}
+.ui-wordmark--lg {
+  font-size: var(--text-2xl);
+}
+.ui-wordmark--lg .ui-wordmark__mark {
+  width: 32px;
+  height: 32px;
+}
+
+/* ====================================================================== */
+/* Surfaces / layout primitives.                                          */
+/* ====================================================================== */
+.ui-surface {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+.ui-card {
+  background: var(--ui-surface-raised);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--da-radius-card);
+  box-shadow: var(--elev-1);
+  padding: var(--space-4);
+}
+.ui-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* empty / loading / error states (planche §4) */
+.ui-skeleton {
+  border-radius: var(--da-radius-card);
+  background: var(--gray-150);
+  animation: ui-pulse-soft calc(1200ms / max(var(--da-motion-scale), 0.001))
+    var(--ease-in-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skeleton {
+    animation: none;
+  }
+  /* Freeze the spinner: the static ring (with its transparent top) still reads
+     as a "busy" indicator, so the loading info is conserved (AC8 / FEN-276). */
+  .ui-btn__spinner {
+    animation: none;
+  }
+}
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8);
+  text-align: center;
+  color: var(--ui-text-secondary);
+}
+
+/* screen-reader-only helper (kept token-free; pure a11y primitive) */
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ====================================================================== */
+/* Motion — signature keyframes (scaled by --da-motion-scale; AC8).       */
+/* ====================================================================== */
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ui-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes ui-place-pop {
+  0% {
+    transform: scale(calc(1 + 0.25 * var(--da-motion-scale)));
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes ui-ring-ping {
+  0% {
+    transform: scale(1);
+    opacity: calc(0.6 * var(--da-motion-scale));
+  }
+  100% {
+    transform: scale(calc(1 + 0.6 * var(--da-motion-scale)));
+    opacity: 0;
+  }
+}
+/* Cooldown "go" phase — a calm breathing of the left-accent (FEN-169/171). */
+@keyframes ui-cooldown-go {
+  0%,
+  100% {
+    border-left-color: var(--status-open-fg);
+  }
+  50% {
+    border-left-color: var(--status-open-bg);
+  }
+}
+
+/* Celebration (handoff §2 — "Moment de célébration"): a non-blocking delight
+   layer over the live canvas. Confetti + a Press Start title spring in, then it
+   self-dismisses; it never traps focus or gates the canvas (AC8). Every motion
+   is opt-in — reduced-motion shows the title + message statically (no confetti,
+   no spring), so the moment still lands without animation. Token-only (AC6). */
+.ui-celebration {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  padding: var(--space-6);
+}
+.ui-celebration__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+  max-width: 22rem;
+}
+.ui-celebration__title {
+  font-family: var(--font-display);
+  color: var(--accent-text);
+  font-size: var(--text-2xl);
+  line-height: 1.25;
+  margin: 0;
+}
+.ui-celebration__message {
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+  font-size: var(--text-base);
+  margin: 0;
+}
+.ui-celebration__pop {
+  font-family: var(--font-display);
+  color: var(--accent);
+  font-size: var(--text-3xl);
+}
+/* Confetti field — purely decorative (aria-hidden); coral "show" + amber are the
+   only place --accent-show is allowed (never text, AC6/Do-Don't). */
+.ui-celebration__confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ui-celebration__piece {
+  position: absolute;
+  top: -8%;
+  width: 8px;
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-show);
+}
+.ui-celebration__piece:nth-child(3n) {
+  background: var(--accent-2);
+}
+.ui-celebration__piece:nth-child(3n + 1) {
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-celebration__panel {
+    animation: ui-celebrate-pop calc(var(--dur-slow) / max(var(--da-motion-scale), 0.001))
+      var(--ease-spring) both;
+  }
+  .ui-celebration__pop {
+    display: inline-block;
+    animation: ui-place-pop calc(var(--dur-base) / max(var(--da-motion-scale), 0.001))
+      var(--ease-spring) both;
+  }
+  .ui-celebration__piece {
+    animation: ui-confetti-fall calc(1400ms / max(var(--da-motion-scale), 0.001))
+      var(--ease-out) forwards;
+  }
+}
+/* Reduced-motion: drop the confetti entirely (decorative, no info lost). */
+@media (prefers-reduced-motion: reduce) {
+  .ui-celebration__confetti {
+    display: none;
+  }
+}
+@keyframes ui-celebrate-pop {
+  0% {
+    transform: scale(calc(1 - 0.12 * var(--da-motion-scale)));
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes ui-confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(540deg);
+    opacity: 0;
+  }
+}

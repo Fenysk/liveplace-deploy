@@ -1,0 +1,288 @@
+/*
+ * Streamer-studio screen styling (FEN-271, Arcade Lot C).
+ *
+ * Layout-only classes for the creator surfaces (dashboard / create / broadcast).
+ * The interactive primitives (Button, Field, StatusPill, Toast, Card, EmptyState)
+ * come from the shared Arcade library (src/ui) — NOTHING here re-implements a
+ * component (AC1). Every value reads a token from `ui/styles/tokens.css`: zero
+ * hard-coded colours / space / radius / type (AC6). `lp-studio-` prefix keeps
+ * these distinct from the `ui-` design-system classes.
+ */
+
+.lp-studio {
+  max-width: 760px;
+  margin: var(--space-10) auto;
+  padding: 0 var(--space-4);
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+}
+.lp-studio--narrow {
+  max-width: 560px;
+}
+
+.lp-studio__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-6);
+}
+.lp-studio__title {
+  margin: 0;
+  font-size: var(--text-2xl);
+  line-height: var(--text-2xl-lh);
+  font-weight: var(--weight-bold);
+  color: var(--ui-text);
+}
+.lp-studio__subtitle {
+  margin: 0 0 var(--space-6);
+  color: var(--ui-text-secondary);
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+}
+.lp-studio__section-title {
+  margin: var(--space-8) 0 var(--space-3);
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-lh);
+  font-weight: var(--weight-semibold);
+  color: var(--ui-text);
+}
+.lp-studio__muted {
+  color: var(--ui-text-secondary);
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+}
+.lp-studio__muted--sm {
+  color: var(--ui-text-tertiary);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-lh);
+}
+
+/* --- Active canvas card (WF-5 top block) --------------------------------- */
+.lp-studio__active-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.lp-studio__live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-lh);
+  font-weight: var(--weight-bold);
+  color: var(--status-open-fg);
+  background: var(--status-open-bg);
+}
+.lp-studio__active-title {
+  font-size: var(--text-xl);
+  line-height: var(--text-xl-lh);
+  font-weight: var(--weight-semibold);
+}
+.lp-studio__statusline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--ui-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-lh);
+  margin: var(--space-3) 0 var(--space-4);
+}
+.lp-studio__sep {
+  color: var(--ui-text-tertiary);
+}
+.lp-studio__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* --- Archives list -------------------------------------------------------- */
+.lp-studio__archive-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.lp-studio__archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-3);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--da-radius-card);
+  background: var(--ui-surface-raised);
+}
+.lp-studio__archive-link {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  gap: var(--space-1);
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+.lp-studio__archive-title {
+  font-weight: var(--weight-semibold);
+  color: var(--ui-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Create form ---------------------------------------------------------- */
+.lp-studio__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.lp-studio__details {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--da-radius-card);
+  padding: var(--space-2) var(--space-4);
+  background: var(--ui-surface-raised);
+}
+.lp-studio__summary {
+  cursor: pointer;
+  font-weight: var(--weight-semibold);
+  color: var(--ui-text);
+  padding: var(--space-2) 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.lp-studio__fieldset {
+  border: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.lp-studio__legend {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ui-text-secondary);
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+.lp-studio__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-lh);
+  color: var(--ui-text);
+  padding: var(--space-1) 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+.lp-studio__choice input {
+  margin-top: var(--space-1);
+  accent-color: var(--accent);
+  width: 18px;
+  height: 18px;
+}
+.lp-studio__consequence {
+  color: var(--ui-text-tertiary);
+}
+.lp-studio__field-row {
+  margin: var(--space-4) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.lp-studio__field-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ui-text-secondary);
+}
+.lp-studio__select {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--da-radius-control);
+  background: var(--ui-surface-raised);
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+}
+.lp-studio__select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: var(--accent-ring);
+}
+.lp-studio__form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/* --- Broadcast (OBS link) ------------------------------------------------- */
+.lp-studio__url-row {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+.lp-studio__url-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  border-radius: var(--da-radius-control);
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+.lp-studio__url-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: var(--accent-ring);
+}
+.lp-studio__steps {
+  margin: 0 0 var(--space-5);
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  line-height: var(--text-base-lh);
+  color: var(--ui-text);
+}
+.lp-studio__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--status-open-fg);
+  font-weight: var(--weight-semibold);
+  margin: 0 0 var(--space-5);
+}
+.lp-studio__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  color: var(--accent-text);
+  text-decoration: none;
+  font-weight: var(--weight-medium);
+}
+.lp-studio__link:hover {
+  text-decoration: underline;
+}
+.lp-studio__link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}

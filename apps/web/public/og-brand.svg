@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0d0d12"/>
+  <!-- Pixel grid decoration — top-left corner mosaic -->
+  <rect x="40" y="40" width="20" height="20" fill="#9146ff" opacity="0.8"/>
+  <rect x="62" y="40" width="20" height="20" fill="#ff4aa0" opacity="0.7"/>
+  <rect x="84" y="40" width="20" height="20" fill="#1e90ff" opacity="0.6"/>
+  <rect x="40" y="62" width="20" height="20" fill="#1e90ff" opacity="0.5"/>
+  <rect x="62" y="62" width="20" height="20" fill="#9146ff" opacity="0.9"/>
+  <rect x="84" y="62" width="20" height="20" fill="#ff4aa0" opacity="0.4"/>
+  <rect x="40" y="84" width="20" height="20" fill="#ff4aa0" opacity="0.6"/>
+  <rect x="62" y="84" width="20" height="20" fill="#1e90ff" opacity="0.8"/>
+  <rect x="84" y="84" width="20" height="20" fill="#9146ff" opacity="0.5"/>
+  <!-- Pixel grid decoration — bottom-right corner mosaic -->
+  <rect x="1096" y="506" width="20" height="20" fill="#9146ff" opacity="0.5"/>
+  <rect x="1118" y="506" width="20" height="20" fill="#ff4aa0" opacity="0.6"/>
+  <rect x="1140" y="506" width="20" height="20" fill="#1e90ff" opacity="0.4"/>
+  <rect x="1096" y="528" width="20" height="20" fill="#1e90ff" opacity="0.7"/>
+  <rect x="1118" y="528" width="20" height="20" fill="#9146ff" opacity="0.5"/>
+  <rect x="1140" y="528" width="20" height="20" fill="#ff4aa0" opacity="0.8"/>
+  <rect x="1096" y="550" width="20" height="20" fill="#ff4aa0" opacity="0.4"/>
+  <rect x="1118" y="550" width="20" height="20" fill="#1e90ff" opacity="0.6"/>
+  <rect x="1140" y="550" width="20" height="20" fill="#9146ff" opacity="0.9"/>
+  <!-- Wordmark -->
+  <text
+    x="600"
+    y="290"
+    font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="96"
+    font-weight="800"
+    fill="#ffffff"
+    text-anchor="middle"
+    letter-spacing="-2"
+  >LivePlace</text>
+  <!-- Tagline -->
+  <text
+    x="600"
+    y="368"
+    font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="30"
+    font-weight="400"
+    fill="#a0a0c0"
+    text-anchor="middle"
+    letter-spacing="0.5"
+  >Canvas de pixels collaboratif en direct sur Twitch</text>
+  <!-- Twitch purple accent bar -->
+  <rect x="520" y="410" width="160" height="4" rx="2" fill="#9146ff"/>
+</svg>

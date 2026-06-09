@@ -1,0 +1,222 @@
+/*
+ * LivePlace design tokens — SINGLE SOURCE OF TRUTH (FEN-268, Lot 0).
+ *
+ * Ported verbatim from the FEN-204 handoff (`tokens.arcade.json` /
+ * `maquettes/src/styles/tokens.css`). Three layers:
+ *   1. primitives        — raw scales (gray, status, space, text, radius, …)
+ *   2. neutral UI + status — direction-agnostic semantic aliases
+ *   3. direction.arcade  — the retained brand layer, applied under
+ *      `[data-direction="fun"]` (set on <html> in index.html).
+ *
+ * RULE (AC6): no component ever hard-codes a colour/space/radius/duration —
+ * everything reads `var(--…)` from here, and `data-direction="fun"` drives
+ * 100% of the brand look. Coral-as-text = `--accent-text`, never `--accent-show`.
+ */
+
+:root {
+  /* ---- primitive · gray ------------------------------------------------ */
+  --gray-0: #ffffff;
+  --gray-25: #f7f7f8;
+  --gray-50: #f0f0f2;
+  --gray-100: #e7e7ea;
+  --gray-150: #dcdce0;
+  --gray-200: #cfcfd4;
+  --gray-300: #b7b7be;
+  --gray-400: #90909a;
+  --gray-500: #6c6c76;
+  --gray-600: #52525b;
+  --gray-700: #3d3d45;
+  --gray-800: #292930;
+  --gray-900: #18181c;
+
+  /* ---- primitive · status ---------------------------------------------- */
+  --status-green-500: #198547;
+  --status-green-100: #dcf3e4;
+  --status-amber-500: #b06f00;
+  --status-amber-100: #fbeccb;
+  --status-red-500: #c2371d;
+  --status-red-100: #fbe3dd;
+  --status-blue-500: #2563c9;
+  --status-blue-100: #dde9fb;
+
+  /* ---- primitive · space ----------------------------------------------- */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---- platform: touch / layering / breakpoints (FEN-311, mobile refonte) --
+     Single source for the values the mobile refonte reads. Custom properties
+     cannot be used inside a media-query condition, so breakpoints are kept here
+     as constants and each media-query repeats the SAME literal with a matching
+     bp comment. No other layout value is hard-coded.
+     WARNING (FEN-326): keep this comment plain ASCII. The Tailwind v4 parser
+     tracks quote and comment state while scanning this :root block; an
+     apostrophe, a stray quote, or a nested comment marker truncated the block
+     in the build and dropped every token defined ABOVE this point
+     (gray / status / space / target-min). The canvas chrome then lost all its
+     var(--space-*) insets and collapsed to the top-left. No apostrophes, no
+     quote chars, no nested comment markers below. -- */
+  --target-min: 44px;          /* minimum tactile target (AC-9 / FEN-288) */
+  --z-canvas: 0;               /* the live board, always interactive */
+  --z-dock: 10;                /* compact action dock + topbar */
+  --z-overlay: 20;             /* onboarding / coach-mark / notices */
+  --z-fab: 25;                 /* ReopenFab + ZoomControls float above overlays (FEN-370) */
+  --z-sheet: 30;               /* bottom-sheet (palette / pose surface) */
+  --z-toast: 40;               /* ephemeral toast / celebrate */
+  --bp-compact: 768px;         /* ≤ : touch / mobile layout */
+  --bp-small: 360px;           /* small-screen breakpoint */
+  /* Panel open/close (R2 FEN-370 AC-R2-1). No apostrophes in this block. */
+  --dock-snap-ratio: 0.25;     /* drag threshold to commit a close/open (25% panel height) */
+  --fab-size: var(--target-min); /* ReopenFab base size = min touch target */
+  --zoom-btn: var(--target-min); /* ZoomControls button size */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* ---- primitive · type (size / line-height) --------------------------- */
+  --text-xs: 12px;
+  --text-xs-lh: 16px;
+  --text-sm: 14px;
+  --text-sm-lh: 20px;
+  --text-base: 16px;
+  --text-base-lh: 24px;
+  --text-lg: 18px;
+  --text-lg-lh: 26px;
+  --text-xl: 22px;
+  --text-xl-lh: 28px;
+  --text-2xl: 28px;
+  --text-2xl-lh: 34px;
+  --text-3xl: 36px;
+  --text-3xl-lh: 42px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---- primitive · radius ---------------------------------------------- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* ---- primitive · elevation ------------------------------------------- */
+  --elev-1: 0 1px 2px rgba(24, 24, 28, 0.06), 0 1px 1px rgba(24, 24, 28, 0.04);
+  --elev-2: 0 2px 6px rgba(24, 24, 28, 0.08), 0 1px 2px rgba(24, 24, 28, 0.06);
+  --elev-3: 0 8px 24px rgba(24, 24, 28, 0.12), 0 2px 6px rgba(24, 24, 28, 0.08);
+  --elev-obs: 0 0 0 2px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.45);
+
+  /* ---- primitive · motion ---------------------------------------------- */
+  --dur-instant: 90ms;
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.22, 0.78, 0.27, 1);
+  --ease-in-out: cubic-bezier(0.5, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.2, 1.3, 0.4, 1);
+
+  /* ---- semantic · neutral UI (direction-agnostic) ---------------------- */
+  --ui-bg: var(--gray-100);
+  --ui-surface: var(--gray-25);
+  --ui-surface-raised: var(--gray-0);
+  --ui-border: var(--gray-150);
+  --ui-border-strong: var(--gray-300);
+  --ui-text: var(--gray-900);
+  --ui-text-secondary: var(--gray-600);
+  --ui-text-tertiary: var(--gray-500);
+  --ui-text-on-accent: var(--gray-0);
+
+  --canvas-field: #cfcfd4;
+  --canvas-checker: #c6c6cc;
+  --canvas-grid: rgba(24, 24, 28, 0.1);
+  --canvas-frame: var(--gray-300);
+
+  /* ---- semantic · status (icon+label always pair these — AC4/A11y) ----- */
+  --status-open-fg: var(--status-green-500);
+  --status-open-bg: var(--status-green-100);
+  --status-cooldown-fg: var(--status-amber-500);
+  --status-cooldown-bg: var(--status-amber-100);
+  --status-frozen-fg: var(--status-blue-500);
+  --status-frozen-bg: var(--status-blue-100);
+  --status-ended-fg: var(--gray-600);
+  --status-ended-bg: var(--gray-100);
+  --status-error-fg: var(--status-red-500);
+  --status-error-bg: var(--status-red-100);
+
+  /* ---- brand-locked (imposed by Twitch, NOT a token to theme away) ----- */
+  --twitch-purple: #9146ff;
+
+  /* ---- typography fallbacks (overridden by the active direction) ------- */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-sans);
+
+  /* ---- direction-agnostic defaults for the brand layer ----------------- */
+  --accent: var(--status-red-500);
+  --accent-hover: #a82d18;
+  --accent-active: #8f2614;
+  --accent-text: #bd3221;
+  --accent-show: #ef4d3a;
+  --accent-soft: #fde3df;
+  --accent-ring: var(--accent);
+  --accent-2: #f4a020;
+  --accent-on-accent: var(--gray-0);
+
+  --da-radius-control: var(--radius-md);
+  --da-radius-card: var(--radius-lg);
+  --da-elev-control: var(--elev-2);
+  --da-motion-scale: 1;
+
+  /* Focus ring (AA, ≥3:1) — read by every :focus-visible. */
+  --focus-ring: var(--accent-ring);
+}
+
+/*
+ * ============================ DIRECTION: ARCADE ============================
+ * The retained brand layer (FEN-196 gate). Square corners = "pixel feel",
+ * coral accent, Press Start 2P reserved for wordmark + celebration headline.
+ */
+:root[data-direction="fun"],
+[data-direction="fun"] {
+  --font-display: "Press Start 2P", "Inter", system-ui, sans-serif;
+
+  --accent: #d6381f; /* AA white-text on buttons (4.72:1) */
+  --accent-hover: #c0331b;
+  --accent-active: #a82d18;
+  --accent-text: #bd3221; /* coral-as-text on light surfaces (AA 4.67:1) */
+  --accent-show: #ef4d3a; /* DECORATIVE only (marks/confetti) — never text */
+  --accent-soft: #fde3df;
+  --accent-ring: #d6381f;
+  --accent-2: #f4a020;
+  --accent-on-accent: #ffffff;
+
+  --da-radius-control: var(--radius-xs); /* 4px — square pixel feel */
+  --da-radius-card: var(--radius-sm); /* 6px */
+  --da-elev-control: var(--elev-2);
+  --da-motion-scale: 1.15; /* a touch more playful feedback */
+}
+
+/*
+ * Reduced-motion: kill the playful intensity but never the information.
+ * Countdowns stay numeric, states stay legible (AC8).
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  [data-direction="fun"] {
+    --da-motion-scale: 0;
+    --dur-instant: 1ms;
+    --dur-fast: 1ms;
+    --dur-base: 1ms;
+    --dur-slow: 1ms;
+  }
+}

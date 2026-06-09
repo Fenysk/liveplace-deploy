@@ -1,0 +1,52 @@
+/*
+ * Arcade connexion-Twitch control — Lot B (FEN-270).
+ *
+ * Token-only styling (AC6): no raw colour/size/radius lives here. The Twitch
+ * brand-lock (#9146FF) flows exclusively through `--twitch-purple` — the ONE
+ * place that hex is defined (tokens.css) — never re-typed. Hover/active darken
+ * the lock by mixing toward the ink token, so no new literal is introduced.
+ *
+ * The connect CTA reuses the Foundation `Button` atom unchanged (AC1/AC2) and
+ * only overrides the Button's own colour custom-properties, so every other
+ * Button behaviour — ≥44px hit area, focus ring, motion, loading spinner — is
+ * inherited verbatim.
+ */
+
+/* Twitch brand CTA: Button atom, brand-locked to Twitch purple. */
+.lp-auth__twitch {
+  --_btn-bg: var(--twitch-purple);
+  --_btn-fg: var(--accent-on-accent);
+  --_btn-bg-hover: color-mix(in srgb, var(--twitch-purple) 88%, var(--gray-900));
+  --_btn-bg-active: color-mix(in srgb, var(--twitch-purple) 78%, var(--gray-900));
+}
+
+/* Signed-in identity row: avatar + name(+profile link) + sign-out. */
+.lp-auth {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lp-auth__avatar {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  flex: none;
+}
+
+/* The name links to the player's own profile. WCAG 2.5.5: keep a ≥44px hit
+   area — `--space-12` (48px) is the nearest token above the floor. */
+.lp-auth__name {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--space-12);
+  padding-inline: var(--space-1);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ui-text);
+  text-decoration: none;
+}
+a.lp-auth__name:hover {
+  text-decoration: underline;
+}

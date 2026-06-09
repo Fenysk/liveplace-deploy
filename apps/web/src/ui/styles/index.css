@@ -1,0 +1,87 @@
+/*
+ * LivePlace UI entry stylesheet (FEN-268, Lot 0).
+ *
+ * Pulls together, in order:
+ *   1. Tailwind v4 runtime (`@import "tailwindcss"`).
+ *   2. Self-hosted fonts + design tokens + component library (token-only).
+ *   3. The `@theme` bridge — exposes the tokens to Tailwind utilities so screen
+ *      lots can write `bg-accent`, `text-ui`, `rounded-control`, … and still
+ *      resolve through the direction-switchable token (single source of truth).
+ *   4. A tiny base layer (html/body) so the app boots with the Arcade look.
+ */
+
+@import "tailwindcss";
+@import "./fonts.css";
+@import "./tokens.css";
+@import "./components.css";
+
+/*
+ * @theme inline → generated utilities reference the ORIGINAL `var(--…)`, so
+ * `data-direction="fun"` (or any future direction) re-skins every utility at
+ * runtime instead of baking a static colour. Tokens remain the source of truth.
+ */
+@theme inline {
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-text: var(--accent-text);
+  --color-accent-show: var(--accent-show);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-2: var(--accent-2);
+  --color-on-accent: var(--accent-on-accent);
+
+  --color-ui-bg: var(--ui-bg);
+  --color-ui-surface: var(--ui-surface);
+  --color-ui-surface-raised: var(--ui-surface-raised);
+  --color-ui-border: var(--ui-border);
+  --color-ui-border-strong: var(--ui-border-strong);
+  --color-ui-text: var(--ui-text);
+  --color-ui-text-secondary: var(--ui-text-secondary);
+  --color-ui-text-tertiary: var(--ui-text-tertiary);
+
+  --color-status-open-fg: var(--status-open-fg);
+  --color-status-open-bg: var(--status-open-bg);
+  --color-status-cooldown-fg: var(--status-cooldown-fg);
+  --color-status-cooldown-bg: var(--status-cooldown-bg);
+  --color-status-frozen-fg: var(--status-frozen-fg);
+  --color-status-frozen-bg: var(--status-frozen-bg);
+  --color-status-ended-fg: var(--status-ended-fg);
+  --color-status-ended-bg: var(--status-ended-bg);
+  --color-status-error-fg: var(--status-error-fg);
+  --color-status-error-bg: var(--status-error-bg);
+
+  --color-twitch: var(--twitch-purple);
+
+  --font-sans: var(--font-sans);
+  /* Note: --font-display is intentionally NOT bridged to @theme here.
+     var(--font-display) inside @theme inline would emit
+     --font-display:var(--font-display) in @layer theme, a self-referencing
+     custom property that resolves as INVALID and silently shadows the
+     [data-direction="fun"] override in tokens.css (FEN-360). The .font-display
+     Tailwind utility is unused; the token is consumed directly via var(). */
+
+  --radius-control: var(--da-radius-control);
+  --radius-card: var(--da-radius-card);
+  --radius-pill: var(--radius-pill);
+
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+  --shadow-obs: var(--elev-obs);
+
+  --ease-out: var(--ease-out);
+  --ease-spring: var(--ease-spring);
+}
+
+html {
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body {
+  margin: 0;
+}

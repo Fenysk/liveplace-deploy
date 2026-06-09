@@ -1,0 +1,136 @@
+# Twitch Canvas reverse proxy (D4/D5, owned by DevOps).
+#
+# The site ADDRESS is driven by $SITE_ADDRESS and decides the scheme/port:
+#   - default `:80`   -> HTTP-only on port 80, accepts ALL hostnames. This is the
+#                        reliable local / behind-a-proxy / behind-a-tunnel mode.
+#                        A bare host like `localhost` is NOT enough: Caddy would
+#                        bind 443 and redirect :80 -> :443, so plain HTTP fails
+#                        (FEN-78 #4). `:80` forces a real HTTP listener.
+#   - `canvas.example.com` (a bare public host) -> Caddy auto-provisions TLS
+#                        (Let's Encrypt) and serves HTTPS on 443.
+#   - `https://nas.local` + `tls internal` below -> LAN HTTPS with a self-signed CA.
+# Set it in .env: SITE_ADDRESS. The host port the proxy binds is separate and is
+# configured by PROXY_HTTP_PORT / PROXY_HTTPS_PORT in docker-compose.yml.
+#
+# Routing model (canonical _default — web is a pure SPA, auth lives in Convex):
+#   /ws*             -> gateway   (WebSocket, ADR-0003)
+#   /c/* (bots only) -> convex SITE origin (:3211) via /api/og/c/:slug rewrite
+#                       (FEN-373: social-bot OG pre-render, UA-gated)
+#   /api/og/*        -> convex SITE origin (:3211)  — OG meta endpoint (FEN-373)
+#   /api/auth*       -> convex SITE origin (:3211)  — Better Auth + Twitch OAuth
+#                       callback (${PUBLIC_SITE_URL}/api/auth/callback/twitch).
+#   /convex*         -> convex CLOUD origin (:3210) — the Convex client API/sync.
+#   everything       -> web       (static SPA assets)
+#
+# The convex backend serves both origins at their own roots, so we strip the
+# public path prefixes with `handle_path` before proxying upstream.
+{$SITE_ADDRESS::80} {
+	# tls internal   # uncomment for a LAN-only NAS over HTTPS (self-signed CA)
+
+	encode gzip zstd
+
+	# Security headers (FEN-87, defence-in-depth — no player-facing behaviour).
+	#
+	# Same-origin model: the SPA, Convex client API/sync (/convex), Better Auth
+	# (/api/auth) and the WS gateway (/ws) are ALL served from THIS origin, so
+	# `'self'` already covers https fetch + same-host wss — no separate Convex /
+	# gateway origins need listing in the default deployment. For a SPLIT-origin
+	# Convex (Convex on its own host), append space-separated origins via env:
+	#   CSP_CONNECT_EXTRA="https://convex.example.com wss://convex.example.com"
+	#   CSP_IMG_EXTRA="https://convex.example.com"
+	#
+	# script-src stays strict 'self' (the built SPA loads only external module
+	# scripts — verified, no inline). style-src allows 'unsafe-inline' because the
+	# bundler/UI may inject <style>; inline style is low-risk vs inline script.
+	# img-src adds the Twitch avatar CDN (profile/gallery avatars) + data: URIs.
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://static-cdn.jtvnw.net {$CSP_IMG_EXTRA:}; font-src 'self' data:; connect-src 'self' {$CSP_CONNECT_EXTRA:}"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# WebSocket gateway (separate service, ADR-0003).
+	@ws path /ws /ws/*
+	reverse_proxy @ws gateway:8080
+
+	# Outreach funnel attribution (FEN-242/FEN-243). The DM links are
+	# /r?ref=XYZ (302 to the site + first-party lp_ref cookie) and the CMO's
+	# /r/report (JSON visits+signups per ref, Bearer GATEWAY_INTERNAL_SECRET).
+	# Both are served by the gateway (same upstream as @ws). EXACT paths only —
+	# NOT a /r* prefix — so the SPA still owns /robots.txt, /register, etc., and
+	# the gateway only matches `path === "/r"` / `"/r/report"` (gateway.ts). Must
+	# precede the SPA fallback or these fall through to web:3000 (404/SPA HTML).
+	@attr path /r /r/report
+	reverse_proxy @attr gateway:8080
+
+	# Social-bot Open Graph pre-render: /c/:slug → /api/og/c/:slug → Convex (FEN-373).
+	# Known sharing crawlers (Discord, X/Twitter, Slack, Facebook, LinkedIn, Telegram,
+	# WhatsApp, Google, Bing, Apple) bypass the SPA and get OG-enriched HTML so that
+	# shared links display a rich preview (canvas title + thumbnail). Real browsers
+	# keep hitting the SPA via the fallback at the bottom.
+	# UA list is conservative — targets bots that actually fetch OG at share time.
+	@canvas-bot {
+		path /c/*
+		header_regexp User-Agent (?i)(facebookexternalhit|Twitterbot|LinkedInBot|Slackbot-LinkExpanding|Discordbot|TelegramBot|WhatsApp|Googlebot|bingbot|msnbot|Applebot|DuckDuckBot|YandexBot)
+	}
+	handle @canvas-bot {
+		rewrite * /api/og{path}
+		reverse_proxy convex-backend:3211
+	}
+
+	# Open Graph meta endpoint — direct access for Sharing Debugger, cURL testing,
+	# and any future server-side use. Must precede the auth route below because
+	# /api/og* and /api/auth* share the /api/ prefix (first match wins in Caddy).
+	handle /api/og/* {
+		reverse_proxy convex-backend:3211
+	}
+
+	# Better Auth HTTP routes incl. the Twitch OAuth callback (Convex site origin).
+	# Kept at the site root (/api/auth*) — Better Auth registers its routes there,
+	# so no prefix is stripped.
+	handle /api/auth* {
+		reverse_proxy convex-backend:3211
+	}
+
+	# Convex / Better-Auth OIDC discovery (FEN-217). Convex validates the session
+	# JWT by fetching its provider discovery doc; auth.config.ts sets the provider
+	# domain to PUBLIC_SITE_URL (this origin), so Convex requests
+	# /.well-known/openid-configuration. Better-Auth registers the discovery doc at
+	# /api/auth/convex/.well-known/openid-configuration (the convex() plugin) and
+	# the JWKS at /api/auth/convex/jwks. These MUST precede the SPA fallback — if
+	# Caddy falls through to web:3000 it returns index.html (200 + HTML) and Convex
+	# throws "Auth provider discovery … failed: 200 OK <!doctype html>".
+	# We rewrite inline (no redirect) so the client sees a direct 200 JSON, which
+	# avoids any OIDC-client redirect-following ambiguity (RFC 8414 §5).
+	handle /.well-known/openid-configuration {
+		rewrite * /api/auth/convex/.well-known/openid-configuration
+		reverse_proxy convex-backend:3211
+	}
+	handle /.well-known/jwks.json {
+		rewrite * /api/auth/convex/jwks
+		reverse_proxy convex-backend:3211
+	}
+
+	# Convex client API/sync. VITE_CONVEX_URL = https://<host>/convex; strip the
+	# /convex prefix so the backend (which serves at root) sees the bare path.
+	handle_path /convex/* {
+		reverse_proxy convex-backend:3210
+	}
+
+	# Static SPA (canvas, gallery, profile, OBS view, …).
+	#
+	# Retry window (FEN-379) — softens the "no available server" 503s QA hit during
+	# Coolify's non-zero-downtime container recreation (FEN-104/FEN-290 deploy-window
+	# pattern). With a single replica, a brief web restart leaves Caddy with no
+	# dialable upstream; without a retry window it 503s immediately. lb_try_duration
+	# makes Caddy keep retrying the dial for up to 3s (every 250ms) so a sub-window
+	# blip is bridged instead of surfaced. Safe here: the SPA fallback serves only
+	# idempotent GET asset/HTML requests, so a retried dial has no side-effect risk.
+	# (A full recreation gap longer than the window still 503s — eliminating that
+	# needs blue-green, which Coolify compose does not do; out of MVP scope.)
+	reverse_proxy web:3000 {
+		lb_try_duration 3s
+		lb_try_interval 250ms
+	}
+}
