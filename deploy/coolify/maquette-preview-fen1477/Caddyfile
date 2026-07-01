@@ -1,0 +1,33 @@
+# FEN-1478 — static PREVIEW server for the FEN-1477 Neobrutalism canvas-viewer
+# maquette, served at https://liveplace.tv/preview/fen-1477-neobrutalism/ via a
+# SEPARATE Coolify app + Traefik PathPrefix router. This container never touches
+# the live liveplace stack; it only owns that one subpath.
+{
+	admin off        # no admin API surface in this throwaway preview box
+	auto_https off   # Coolify's Traefik edge terminates TLS in front of us
+}
+
+:80 {
+	encode gzip zstd
+
+	# Keep the design preview out of search indexes (belt-and-braces vs prod URL).
+	header {
+		X-Robots-Tag "noindex, nofollow, noarchive"
+		-Server
+	}
+
+	# Health endpoint for the container/Coolify healthcheck (must precede rewrite).
+	@health path /healthz
+	respond @health "ok" 200
+
+	# Explicit robots.txt disallow for the whole preview host path.
+	@robots path /robots.txt
+	respond @robots "User-agent: *\nDisallow: /\n" 200
+
+	# The maquette is a SINGLE self-contained file (fonts inlined base64, no sub-
+	# resource requests). Serve it for ANY other path so the preview renders
+	# whether Traefik strips the /preview/... prefix or forwards it verbatim.
+	rewrite * /index.html
+	root * /srv
+	file_server
+}

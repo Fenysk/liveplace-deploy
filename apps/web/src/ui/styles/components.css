@@ -1,0 +1,1303 @@
+/*
+ * Arcade component library styles (FEN-268, Lot 0 — §3 handoff).
+ *
+ * One class-set per reusable component, covering ALL states/variants. Every
+ * value reads a token from `tokens.css` — zero hard-coded colours/space/radius/
+ * duration (AC6). React components in `src/ui/*.tsx` are thin wrappers that map
+ * props → these classes (see `variants.ts` for the pure, unit-tested mapping).
+ *
+ * Prefix `ui-` (the shared design system) keeps these distinct from the legacy
+ * `lp-` screen classes (canvas.css), which the screen lots migrate onto these.
+ */
+
+/* ====================================================================== */
+/* Focus — visible everywhere (AC7). 2px AA ring via --focus-ring.        */
+/* ====================================================================== */
+.ui-focusable:focus-visible,
+.ui-btn:focus-visible,
+.ui-field__control:has(.ui-field__input:focus-visible),
+.ui-swatch:focus-visible,
+.ui-toast__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ====================================================================== */
+/* Button (AC2) — variant × size × {default,hover,active,focus,loading,   */
+/* disabled}. Primary = --accent under white text. md/lg ≥44/48px.        */
+/* ====================================================================== */
+.ui-btn {
+  --_btn-bg: var(--accent);
+  --_btn-fg: var(--accent-on-accent);
+  --_btn-bg-hover: var(--accent-hover);
+  --_btn-bg-active: var(--accent-active);
+  --_btn-border: transparent;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  border: var(--border-w) solid var(--_btn-border);
+  border-radius: var(--da-radius-control);
+  background: var(--_btn-bg);
+  color: var(--_btn-fg);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+  box-shadow: var(--da-elev-control);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.ui-btn:hover {
+  background: var(--_btn-bg-hover);
+  box-shadow: var(--elev-2);
+}
+.ui-btn:active {
+  background: var(--_btn-bg-active);
+  box-shadow: var(--elev-press);
+  transform: translateY(1px) scale(calc(1 - 0.01 * var(--da-motion-scale)));
+}
+
+/* sizes — ≥44px hit area on md/lg (AC7) */
+.ui-btn--sm {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+.ui-btn--md {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-base);
+}
+.ui-btn--lg {
+  min-height: 48px;
+  padding: 0 var(--space-6);
+  font-size: var(--text-lg);
+}
+
+/* variants */
+.ui-btn--secondary {
+  --_btn-bg: var(--ui-surface-raised);
+  --_btn-fg: var(--ui-text);
+  --_btn-bg-hover: var(--gray-50);
+  --_btn-bg-active: var(--gray-100);
+  --_btn-border: var(--ui-border-strong);
+}
+.ui-btn--ghost {
+  --_btn-bg: transparent;
+  --_btn-fg: var(--accent-text);
+  --_btn-bg-hover: var(--accent-soft);
+  --_btn-bg-active: var(--accent-soft);
+  --_btn-border: transparent;
+  box-shadow: none;
+}
+/* Ghost stays flat in every state (no hard shadow). */
+.ui-btn--ghost:hover,
+.ui-btn--ghost:active {
+  box-shadow: none;
+}
+
+/* states */
+.ui-btn:disabled,
+.ui-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+.ui-btn[data-loading="true"] {
+  cursor: progress;
+  color: transparent;
+}
+.ui-btn__spinner {
+  position: absolute;
+  width: 1.1em;
+  height: 1.1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: var(--radius-pill);
+  color: var(--_btn-fg);
+  animation: ui-spin 0.7s linear infinite;
+}
+.ui-btn {
+  position: relative;
+}
+
+/* ====================================================================== */
+/* Field (AC3) — label + input + hint/error. focus/error/disabled.        */
+/* ====================================================================== */
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-family: var(--font-sans);
+}
+.ui-field__label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ui-text-secondary);
+}
+/* The border/background/radius live on the CONTROL, not the input, so a prefix
+   can sit IN FLOW before a borderless input — the input then clears any prefix
+   width automatically (a fixed padding-left can't fit "https://"; FEN-276). */
+.ui-field__control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border: var(--border-w-strong) solid var(--ui-border-strong);
+  border-radius: var(--da-radius-control);
+  background: var(--ui-surface-raised);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.ui-field__prefix {
+  flex: none;
+  padding-left: var(--space-3);
+  color: var(--ui-text-tertiary);
+  font-size: var(--text-base);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.ui-field__input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--da-radius-control);
+  background: transparent;
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+}
+.ui-field__input::placeholder {
+  color: var(--ui-text-tertiary);
+}
+/* With the prefix in flow, the input only needs a small gap after it. */
+.ui-field__control[data-prefix="true"] .ui-field__input {
+  padding-left: var(--space-1);
+}
+.ui-field__control:focus-within {
+  border-color: var(--accent-ring);
+}
+.ui-field[data-state="error"] .ui-field__control {
+  border-color: var(--status-error-fg);
+}
+.ui-field[data-state="disabled"] .ui-field__control {
+  opacity: 0.5;
+  background: var(--ui-surface);
+}
+.ui-field__input:disabled {
+  cursor: not-allowed;
+}
+.ui-field__hint {
+  font-size: var(--text-xs);
+  color: var(--ui-text-tertiary);
+}
+.ui-field__error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--status-error-fg);
+}
+.ui-field__error::before {
+  content: "!";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--status-error-fg);
+  color: var(--gray-0);
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+}
+
+/* ====================================================================== */
+/* Toast — success/info/error. Icon + label (never colour-only).          */
+/* ====================================================================== */
+.ui-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 360px;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-w) solid var(--ui-border);
+  border-left-width: 4px;
+  border-radius: var(--da-radius-card);
+  background: var(--ui-surface-raised);
+  box-shadow: var(--elev-3);
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+}
+.ui-toast__icon {
+  flex: none;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--weight-bold);
+}
+.ui-toast__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ui-toast__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.ui-toast__msg {
+  font-size: var(--text-sm);
+  color: var(--ui-text-secondary);
+}
+.ui-toast--success {
+  border-left-color: var(--status-open-fg);
+}
+.ui-toast--success .ui-toast__icon {
+  color: var(--status-open-fg);
+}
+.ui-toast--info {
+  border-left-color: var(--status-frozen-fg);
+}
+.ui-toast--info .ui-toast__icon {
+  color: var(--status-frozen-fg);
+}
+.ui-toast--error {
+  border-left-color: var(--status-error-fg);
+}
+.ui-toast--error .ui-toast__icon {
+  color: var(--status-error-fg);
+}
+.ui-toast__close {
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+}
+
+/* ====================================================================== */
+/* StatusPill (AC4) — 5 states; icon + label, never colour alone.         */
+/* ====================================================================== */
+.ui-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-lh);
+  font-weight: var(--weight-semibold);
+}
+.ui-pill__icon {
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+.ui-pill--open {
+  color: var(--status-open-fg);
+  background: var(--status-open-bg);
+}
+.ui-pill--cooldown {
+  color: var(--status-cooldown-fg);
+  background: var(--status-cooldown-bg);
+}
+.ui-pill--frozen {
+  color: var(--status-frozen-fg);
+  background: var(--status-frozen-bg);
+}
+.ui-pill--ended {
+  color: var(--status-ended-fg);
+  background: var(--status-ended-bg);
+}
+.ui-pill--error {
+  color: var(--status-error-fg);
+  background: var(--status-error-bg);
+}
+
+/* ====================================================================== */
+/* Gauge (AC4) — ready (horizontal bars) · cooldown (ring + tnum count). */
+/* ====================================================================== */
+.ui-gauge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+}
+
+/* Ready mode: horizontal bar track (B1, FEN-418). Two layers: total (gray
+   track background) + available (accent fill). Optional third animated
+   projection bar when a batch is staged (B2/B3). */
+.ui-gauge[data-mode="bar"] {
+  width: 100%;
+}
+.ui-gauge__track {
+  --_fill: 0;
+  --_proj: 0;
+  position: relative;
+  flex: 1;
+  height: 10px;
+  background: var(--accent-soft); /* total capacity */
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.ui-gauge__fill {
+  position: absolute;
+  inset: 0;
+  right: auto;
+  width: calc(var(--_fill) * 100%);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: width var(--dur-base) var(--ease-out);
+}
+/* Projection bar (B2/B3): pixels remaining after the staged pose.
+   Drawn on top of fill as a white translucent ghost so the "spending zone"
+   (fill minus projection) reads as the pixels being spent.
+   White ghost vs coral (accent) gives clear AC1 contrast; dark-neutral outline
+   ensures the segment remains distinguishable on the light gauge background.
+   Breathing pulse (AC2) signals the value is provisional.
+   Animation is opt-in under prefers-reduced-motion (AC3). */
+.ui-gauge__proj {
+  position: absolute;
+  inset: 0;
+  right: auto;
+  width: calc(var(--_proj) * 100%);
+  background: color-mix(in srgb, var(--gray-0) 85%, transparent);
+  border-radius: var(--radius-pill);
+  outline: 1px solid color-mix(in srgb, var(--gray-700) 40%, transparent);
+  outline-offset: -1px;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-gauge__proj {
+    animation: ui-gauge-proj calc(1600ms / max(var(--da-motion-scale), 0.001))
+      var(--ease-in-out) infinite;
+  }
+  @keyframes ui-gauge-proj {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+}
+/* Reduced-motion: no pulse; keep ghost + neutral dashed outline (AC3). */
+@media (prefers-reduced-motion: reduce) {
+  .ui-gauge__proj {
+    outline: 1px dashed color-mix(in srgb, var(--gray-700) 50%, transparent);
+    outline-offset: -1px;
+  }
+}
+.ui-gauge__ring {
+  --_pct: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  background: conic-gradient(
+    var(--status-cooldown-fg) calc(var(--_pct) * 1%),
+    var(--status-cooldown-bg) 0
+  );
+  display: inline-grid;
+  place-items: center;
+}
+.ui-gauge__ring::after {
+  content: "";
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  background: var(--ui-surface-raised);
+}
+/* FEN-1482 — when a stepLabel is passed, the centre disc becomes a real element
+   carrying the "+N" glyph, so the ring reads "+1 pixel" and the seconds sit
+   alongside without eating the reserve bar's width. Drop the ::after disc so the
+   two don't stack. `.ui-gauge__ring` is a centring grid, so the inner disc lands
+   dead-centre exactly like the pseudo it replaces. */
+.ui-gauge__ring:has(.ui-gauge__inner)::after {
+  content: none;
+}
+.ui-gauge__inner {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  background: var(--ui-surface-raised);
+  display: inline-grid;
+  place-items: center;
+}
+.ui-gauge__ringnum {
+  color: var(--accent-text);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs-lh);
+  font-variant-numeric: tabular-nums;
+}
+.ui-gauge__count {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-weight: var(--weight-semibold);
+  color: var(--status-cooldown-fg);
+}
+.ui-gauge__label {
+  font-size: var(--text-sm);
+  color: var(--ui-text-secondary);
+}
+
+/* Cooldown anticipation ramp (FEN-169/171 folded into the design-system Gauge).
+   Phase is carried by a LEFT-ACCENT + WEIGHT + HUE on the count, so the three
+   rungs stay distinguishable in greyscale / for colour-blind users (AC7) — never
+   hue alone. Token-only (AC6); the parked craft's hardcoded dark hexes are
+   replaced by the Arcade status families: warm amber for the cooling rungs (the
+   cooldown-toast family), calm "go" green for the refill (the success family).
+   It reads as escalating anticipation, never urgent/error red. */
+.ui-gauge[data-phase] {
+  padding-left: var(--space-2);
+  border-left: 3px solid transparent;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    border-width var(--dur-fast) var(--ease-out);
+}
+.ui-gauge[data-phase="waiting"] {
+  border-left-color: var(--status-cooldown-bg);
+}
+.ui-gauge[data-phase="waiting"] .ui-gauge__count {
+  color: var(--status-cooldown-fg);
+  font-weight: var(--weight-semibold);
+}
+.ui-gauge[data-phase="armed"] {
+  border-left-width: 4px;
+  border-left-color: var(--accent-2);
+}
+.ui-gauge[data-phase="armed"] .ui-gauge__count {
+  color: var(--status-cooldown-fg);
+  font-weight: var(--weight-bold);
+}
+.ui-gauge[data-phase="ready"] {
+  border-left-width: 4px;
+  border-left-color: var(--status-open-fg);
+}
+.ui-gauge[data-phase="ready"] .ui-gauge__count {
+  color: var(--status-open-fg);
+  font-weight: var(--weight-bold);
+}
+/* A sober "go" pulse on the left-accent draws the eye to the confirm gesture —
+   anticipation, not alarm. Opt-in: the weight/hue cues above stand alone, so
+   reduced-motion simply drops it (AC8). Scaled by --da-motion-scale like every
+   signature animation. */
+@media (prefers-reduced-motion: no-preference) {
+  .ui-gauge[data-phase="ready"] {
+    animation: ui-cooldown-go calc(1600ms / max(var(--da-motion-scale), 0.001))
+      var(--ease-in-out) infinite;
+  }
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ====================================================================== */
+/* ReserveMeter (FEN-338) — bounded pose reserve: count pastille + capped  */
+/* bar. THE overflow fix: footprint is identical for every N (only the     */
+/* fill varies), so the dock never scrolls horizontally (AC-1/AC-2). All   */
+/* token-only (AC-5).                                                      */
+/* ====================================================================== */
+.ui-reserve {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  /* The whole meter is bounded to its container; the body flexes and the bar
+     clips its fill, so nothing can spill past the edge whatever the count. */
+  min-width: 0;
+}
+.ui-reserve__count {
+  flex: none;
+  /* Fixed width (2-digit slot, tabular figures): 20 and 40 occupy the SAME
+     box — the count never reflows the row. */
+  min-width: 2.25em;
+  text-align: center;
+  padding: var(--space-1) var(--space-2);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--da-radius-control);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-lg);
+  line-height: 1.1;
+}
+.ui-reserve__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ui-reserve__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.ui-reserve__label {
+  color: var(--ui-text);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-reserve__cap {
+  flex: none;
+  color: var(--ui-text-secondary);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+}
+.ui-reserve__bar {
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ui-text) 12%, transparent);
+  overflow: hidden;
+}
+.ui-reserve__fill {
+  display: block;
+  height: 100%;
+  width: var(--_fill, 0%);
+  max-width: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width var(--dur-base) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-reserve__fill {
+    transition: none;
+  }
+}
+
+/* ====================================================================== */
+/* ColorSelector (AC5) — swatch grid. Selected = marching-ants border     */
+/* (FEN-1488). Swatch fill = EXACT palette hex (no tint/opacity).         */
+/* ====================================================================== */
+.ui-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  gap: var(--space-2);
+}
+.ui-swatches[data-compact="true"] {
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: var(--space-1);
+}
+.ui-swatch {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border: var(--border-w-strong) solid var(--ui-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0;
+}
+.ui-swatches[data-compact="true"] .ui-swatch {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+/* Marching-ants SVG overlay (FEN-1488): bi-tone border that scrolls around
+   the selected swatch, matching the canvas pixel-inspect animation (renderer.ts
+   drawInspectFrame). Two rect strokes share the same dash pattern but are
+   offset by half a period: one white, one black — readable on any swatch colour.
+   Positioned 2 px outside the button's border box so it never overlaps the fill.
+   pointer-events:none + overflow:visible so it cannot interfere with clicks. */
+.ui-swatch__ants {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: calc(100% + 4px);
+  height: calc(100% + 4px);
+  pointer-events: none;
+  overflow: visible;
+}
+.ui-swatch__ants rect {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+.ui-swatch__ants-white {
+  stroke: rgba(255, 255, 255, 0.95);
+}
+.ui-swatch__ants-black {
+  stroke: rgba(0, 0, 0, 0.85);
+}
+@keyframes ui-ants-dash {
+  to { stroke-dashoffset: -10; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-swatch__ants-white {
+    animation: ui-ants-dash 0.4s linear infinite;
+  }
+  /* Black layer starts half-period ahead (−0.2s delay) so white + black
+     together tile the full perimeter with no gaps — exact CSS equivalent of
+     the canvas renderer's two-offset strokeRect passes. */
+  .ui-swatch__ants-black {
+    animation: ui-ants-dash 0.4s linear infinite -0.2s;
+  }
+}
+
+/* Eraser swatch (FEN-418 A7 / FEN-829 AC-2): 2-cell wide, icon + label, neutral surface.
+   grid-column:span 2 makes it occupy two grid tracks so it is easier to tap and
+   visually distinct from the colour swatches. width:auto lets the grid track size it. */
+.ui-swatch[data-eraser="true"] {
+  width: auto;
+  min-width: 36px;
+  padding: 0 var(--space-3);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  grid-column: span 2;
+}
+/* FEN-881 AC-2: compact mode sets width:28px on all .ui-swatch (higher specificity).
+   Override here to restore width:auto so the eraser renders as one rectangle, not two squares. */
+.ui-swatches[data-compact="true"] .ui-swatch[data-eraser="true"] {
+  width: auto;
+  height: auto;
+  min-height: 28px;
+}
+.ui-swatch__eraser-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+/* ====================================================================== */
+/* Wordmark / brand — Press Start 2P display face (AC11).                  */
+/* ====================================================================== */
+.ui-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  color: var(--ui-text);
+  line-height: 1;
+}
+.ui-wordmark__mark {
+  flex: none;
+  display: inline-block;
+  background: var(--accent-show);
+  border-radius: var(--da-radius-control);
+}
+.ui-wordmark__accent {
+  color: var(--accent-text);
+}
+.ui-wordmark--sm {
+  font-size: var(--text-sm);
+}
+.ui-wordmark--sm .ui-wordmark__mark {
+  width: 16px;
+  height: 16px;
+}
+.ui-wordmark--md {
+  font-size: var(--text-lg);
+}
+.ui-wordmark--md .ui-wordmark__mark {
+  width: 22px;
+  height: 22px;
+}
+.ui-wordmark--lg {
+  font-size: var(--text-2xl);
+}
+.ui-wordmark--lg .ui-wordmark__mark {
+  width: 32px;
+  height: 32px;
+}
+
+/* ====================================================================== */
+/* Surfaces / layout primitives.                                          */
+/* ====================================================================== */
+.ui-surface {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+.ui-card {
+  background: var(--ui-surface-raised);
+  border: var(--border-w) solid var(--ui-border);
+  border-radius: var(--da-radius-card);
+  box-shadow: var(--elev-1);
+  padding: var(--space-4);
+}
+.ui-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* empty / loading / error states (planche §4) */
+.ui-skeleton {
+  border-radius: var(--da-radius-card);
+  background: var(--gray-150);
+  animation: ui-pulse-soft calc(1200ms / max(var(--da-motion-scale), 0.001))
+    var(--ease-in-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skeleton {
+    animation: none;
+  }
+  /* Freeze the spinner: the static ring (with its transparent top) still reads
+     as a "busy" indicator, so the loading info is conserved (AC8 / FEN-276). */
+  .ui-btn__spinner {
+    animation: none;
+  }
+}
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8);
+  text-align: center;
+  color: var(--ui-text-secondary);
+}
+
+/* screen-reader-only helper (kept token-free; pure a11y primitive) */
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ====================================================================== */
+/* Motion — signature keyframes (scaled by --da-motion-scale; AC8).       */
+/* ====================================================================== */
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ui-pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes ui-place-pop {
+  0% {
+    transform: scale(calc(1 + 0.25 * var(--da-motion-scale)));
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes ui-ring-ping {
+  0% {
+    transform: scale(1);
+    opacity: calc(0.6 * var(--da-motion-scale));
+  }
+  100% {
+    transform: scale(calc(1 + 0.6 * var(--da-motion-scale)));
+    opacity: 0;
+  }
+}
+/* Cooldown "go" phase — a calm breathing of the left-accent (FEN-169/171). */
+@keyframes ui-cooldown-go {
+  0%,
+  100% {
+    border-left-color: var(--status-open-fg);
+  }
+  50% {
+    border-left-color: var(--status-open-bg);
+  }
+}
+
+/* Celebration (handoff §2 — "Moment de célébration"): a non-blocking delight
+   layer over the live canvas. Confetti + a Press Start title spring in, then it
+   self-dismisses; it never traps focus or gates the canvas (AC8). Every motion
+   is opt-in — reduced-motion shows the title + message statically (no confetti,
+   no spring), so the moment still lands without animation. Token-only (AC6). */
+.ui-celebration {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  padding: var(--space-6);
+}
+.ui-celebration__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+  max-width: 22rem;
+}
+.ui-celebration__title {
+  font-family: var(--font-display);
+  color: var(--accent-text);
+  font-size: var(--text-2xl);
+  line-height: 1.25;
+  margin: 0;
+}
+.ui-celebration__message {
+  font-family: var(--font-sans);
+  color: var(--ui-text);
+  font-size: var(--text-base);
+  margin: 0;
+}
+.ui-celebration__pop {
+  font-family: var(--font-display);
+  color: var(--accent);
+  font-size: var(--text-3xl);
+}
+/* Confetti field — purely decorative (aria-hidden); coral "show" + amber are the
+   only place --accent-show is allowed (never text, AC6/Do-Don't). */
+.ui-celebration__confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ui-celebration__piece {
+  position: absolute;
+  top: -8%;
+  width: 8px;
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-show);
+}
+.ui-celebration__piece:nth-child(3n) {
+  background: var(--accent-2);
+}
+.ui-celebration__piece:nth-child(3n + 1) {
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-celebration__panel {
+    animation: ui-celebrate-pop calc(var(--dur-slow) / max(var(--da-motion-scale), 0.001))
+      var(--ease-spring) both;
+  }
+  .ui-celebration__pop {
+    display: inline-block;
+    animation: ui-place-pop calc(var(--dur-base) / max(var(--da-motion-scale), 0.001))
+      var(--ease-spring) both;
+  }
+  .ui-celebration__piece {
+    animation: ui-confetti-fall calc(1400ms / max(var(--da-motion-scale), 0.001))
+      var(--ease-out) forwards;
+  }
+}
+/* Reduced-motion: drop the confetti entirely (decorative, no info lost). */
+@media (prefers-reduced-motion: reduce) {
+  .ui-celebration__confetti {
+    display: none;
+  }
+}
+@keyframes ui-celebrate-pop {
+  0% {
+    transform: scale(calc(1 - 0.12 * var(--da-motion-scale)));
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes ui-confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(540deg);
+    opacity: 0;
+  }
+}
+
+/* ====================================================================== */
+/* HeroGauge — G5 desktop heroic gauge (FEN-633).                         */
+/* Roll-up counter + icon (lightning/star) + segment bar + state sub-text. */
+/* Token-only. AC4: state distinguishable by density + icon + text, never  */
+/* by colour alone. AC6: aria-live on state/charges change, not each tick. */
+/* ====================================================================== */
+.ui-hero-gauge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Header row: icon + big counter + optional badge */
+.ui-hero-gauge__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  line-height: 1;
+}
+
+/* State icon (⚡ charging/empty, ★ full) */
+.ui-hero-gauge__icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-text);
+  transition: color var(--dur-base) var(--ease-out);
+}
+.ui-hero-gauge[data-state="full"] .ui-hero-gauge__icon {
+  color: var(--accent-text);
+}
+
+/* Counter n/max — tabular-nums so digits don't jitter (AC1) */
+.ui-hero-gauge__counter {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  color: var(--ui-text);
+  letter-spacing: -0.01em;
+  line-height: var(--text-xl-lh, 1.2);
+}
+.ui-hero-gauge__sep {
+  color: var(--ui-text-tertiary);
+  font-weight: var(--weight-semibold);
+  margin: 0 1px;
+}
+.ui-hero-gauge__max {
+  color: var(--ui-text-secondary);
+}
+
+/* "Plein" / "Full" badge — inline-flex so it stretches for FR/EN (AC5) */
+.ui-hero-gauge__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  border: 1px solid var(--accent-ring);
+}
+
+/* Segment bar — bounded fill, fixed height (anti-overflow) */
+.ui-hero-gauge__bar {
+  position: relative;
+  height: 10px;
+  background: var(--ui-surface);
+  border: var(--border-w) solid var(--ui-border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+.ui-hero-gauge__fill {
+  position: absolute;
+  inset: 0;
+  width: calc(var(--_fill, 0) * 100%);
+  background: var(--accent);
+  border-radius: var(--radius-xs);
+  transition: width var(--dur-base) var(--ease-out);
+}
+.ui-hero-gauge[data-state="full"] .ui-hero-gauge__fill {
+  width: 100%;
+  background: var(--accent);
+}
+/* "charging-block": pulsing partial block at the fill edge, shows regen activity */
+.ui-hero-gauge__charging-block {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--_fill, 0) * 100%);
+  width: 12px;
+  background: var(--accent-soft);
+  border-radius: var(--radius-xs);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-hero-gauge__charging-block {
+    animation: ui-hero-charging-pulse calc(1s / max(var(--da-motion-scale), 0.001))
+      linear infinite;
+  }
+  @keyframes ui-hero-charging-pulse {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 0.3; }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-hero-gauge__fill {
+    transition: none;
+  }
+  .ui-hero-gauge__charging-block {
+    opacity: 0.5;
+  }
+}
+
+/* Sub-line: state text + countdown (aria-hidden — live region handles a11y) */
+.ui-hero-gauge__sub {
+  font-size: var(--text-sm);
+  color: var(--ui-text-secondary);
+  line-height: 1.3;
+}
+.ui-hero-gauge__sub-text {
+  font-weight: var(--weight-semibold);
+}
+.ui-hero-gauge[data-state="full"] .ui-hero-gauge__sub-text {
+  color: var(--accent-text);
+}
+.ui-hero-gauge[data-state="empty"] .ui-hero-gauge__sub-text {
+  color: var(--ui-text-secondary);
+}
+/* Countdown "+N dans Xs" — tabular-nums so digits don't jitter */
+.ui-hero-gauge__countdown {
+  font-weight: var(--weight-medium);
+  opacity: 0.85;
+}
+
+/* ====================================================================== */
+/* MiniGauge — G5/G7 compact 1-line version (FEN-633 AC5).                */
+/* Caller wraps it in a button/pill; this is a pure inline display atom.   */
+/* ====================================================================== */
+.ui-mini-gauge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--ui-text);
+  line-height: 1;
+}
+.ui-mini-gauge__icon {
+  font-style: normal;
+}
+.ui-mini-gauge__count {
+  color: var(--ui-text);
+}
+.ui-mini-gauge__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-1);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+}
+.ui-mini-gauge__countdown {
+  color: var(--ui-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+/* ====================================================================== */
+/* StateScreen — full-page empty/error/404 state (G9, FEN-622).           */
+/* Centres content, two equal-weight exit CTA buttons, Arcade kicker.     */
+/* Token-only (AC8). Tone "error" colours kicker red.                     */
+/* Neobrutalism finishing (FEN-1500): ink border + hard shadow on card,   */
+/* framed art container, bold title, square pixel art.                    */
+/* ====================================================================== */
+.ui-state-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  font-family: var(--font-sans);
+  background: var(--ui-bg);
+}
+/* Neobrutalism card: ink border + hard shadow, white surface, no radius. */
+.ui-state-screen__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-8) var(--space-6);
+  background: var(--ui-surface);
+  border: var(--border-w-strong) solid var(--ink);
+  box-shadow: var(--elev-3);
+  max-width: 480px;
+  width: 100%;
+}
+.ui-state-screen__kicker {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  color: var(--accent-text);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+  line-height: 1.6;
+}
+.ui-state-screen--error .ui-state-screen__kicker {
+  color: var(--status-error-fg);
+}
+/* Art frame: ink border + hard shadow makes the pixel motif feel "placed". */
+.ui-state-screen__art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+  border: var(--border-w) solid var(--ink);
+  box-shadow: var(--elev-1);
+  padding: var(--space-2);
+}
+.ui-state-screen__title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-black);
+  color: var(--ui-text);
+  margin: 0;
+  line-height: var(--text-2xl-lh);
+  max-width: 28ch;
+}
+.ui-state-screen__sub {
+  font-size: var(--text-base);
+  color: var(--ui-text-secondary);
+  max-width: 32ch;
+  margin: 0;
+  line-height: var(--text-base-lh);
+}
+.ui-state-screen__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+}
+@media (max-width: 480px) {
+  .ui-state-screen__card {
+    padding: var(--space-6) var(--space-4);
+  }
+  .ui-state-screen__title {
+    font-size: var(--text-xl);
+    line-height: var(--text-xl-lh);
+  }
+  .ui-state-screen__actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    max-width: 320px;
+  }
+  .ui-state-screen__actions .ui-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ====================================================================== */
+/* OfflineBanner — non-blocking reconnection overlay (G9, FEN-622, AC6).  */
+/* Fixed top-centre; pointer-events:none so canvas stays interactive.     */
+/* Amber pulse = reconnecting (not error red). reduced-motion safe.       */
+/* Neobrutalism finishing (FEN-1500): square dot, hard shadow, press      */
+/* effect on reload, error border on failed state.                        */
+/* ====================================================================== */
+.ui-offline-banner-wrap {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-toast);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.ui-offline-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 0 0 var(--da-radius-card) var(--da-radius-card);
+  background: var(--ui-surface-raised);
+  border: var(--border-w-strong) solid var(--ink);
+  border-top: none;
+  box-shadow: var(--elev-2);
+  font-size: var(--text-sm);
+  color: var(--ui-text);
+  pointer-events: auto;
+}
+/* Square dot — Neobrutalism; radius-pill would be out of place here. */
+.ui-offline-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  background: var(--status-cooldown-fg);
+  flex-shrink: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-offline-banner__dot {
+    animation: ui-offline-pulse calc(1.2s / max(var(--da-motion-scale), 0.001)) ease-in-out infinite;
+  }
+}
+.ui-offline-banner__label {
+  color: var(--ui-text-secondary);
+  font-size: var(--text-sm);
+}
+/* Failed state: error border color signals severity beyond amber pulse. */
+.ui-offline-banner--failed {
+  border-color: var(--status-error-fg);
+}
+.ui-offline-banner--failed .ui-offline-banner__dot {
+  background: var(--status-error-fg);
+  animation: none;
+}
+.ui-offline-banner--failed .ui-offline-banner__label {
+  color: var(--ui-text);
+  font-weight: var(--weight-semibold);
+}
+/* Reload button: hard shadow + press/lift motion (Neobrutalism signature). */
+.ui-offline-banner__reload {
+  margin-left: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--da-radius-control);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  min-height: 28px;
+  box-shadow: var(--elev-1);
+  transition:
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.ui-offline-banner__reload:hover {
+  box-shadow: var(--elev-2);
+}
+.ui-offline-banner__reload:active {
+  box-shadow: var(--elev-press);
+  transform: translateY(1px) scale(calc(1 - 0.01 * var(--da-motion-scale)));
+}
+.ui-offline-banner__reload:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@keyframes ui-offline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

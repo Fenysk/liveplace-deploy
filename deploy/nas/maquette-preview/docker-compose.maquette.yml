@@ -1,0 +1,47 @@
+# LivePlace — static maquette PREVIEW on the shared NAS (FEN-1478).
+#
+# Serves an autonomous design maquette folder (e.g. the FEN-1477 Neobrutalism
+# canvas-viewer) as plain static files, fronted by the host `.nas` dns-router.
+# This is a PREVIEW box for Alexis to validate a design — NOT Coolify, NOT prod,
+# NOT liveplace.tv. Fully isolated from the `liveplace` / `liveplace-test` stacks.
+#
+#   docker compose -p liveplace-maquette \
+#     -f deploy/nas/maquette-preview/docker-compose.maquette.yml up -d
+#
+# Isolation / blast-radius contract (NAS is shared):
+#   * Project name `liveplace-maquette` prefixes the container + network -> zero
+#     collision with any other stack on the box.
+#   * Publishes a LOOPBACK-ONLY host port (127.0.0.1) so the host-network
+#     dns-router-caddy can dial `localhost:${MAQUETTE_PORT}` while the LAN never
+#     sees it directly. Never 0.0.0.0.
+#   * Read-only bind mount of the maquette folder; the container can mutate
+#     nothing on the host.
+#   * Tiny resource envelope — it is a static file server.
+#
+# Required inputs (env / .env next to this file):
+#   MAQUETTE_DIR   absolute host path to the maquette folder to serve
+#                  (the directory that contains index.html).
+#   MAQUETTE_PORT  loopback host port to publish (default 8095). Must match the
+#                  target registered in the .nas dns-router (see README.md).
+name: liveplace-maquette
+
+services:
+  maquette:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${MAQUETTE_DIR:?set MAQUETTE_DIR to the maquette folder (the one with index.html)}:/srv:ro
+    ports:
+      - "127.0.0.1:${MAQUETTE_PORT:-8095}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M

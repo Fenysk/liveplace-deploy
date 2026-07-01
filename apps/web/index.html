@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr" data-direction="fun">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/svg/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!--
+      Preload the "Press Start 2P" display face (FEN-321). The @font-face lives in
+      fonts.css, but with `font-display: swap` the browser only discovers it AFTER
+      CSS parse + layout finds an element using `--font-display` — so the wordmark
+      and the suddenly-appearing celebration headline first paint in the Inter
+      fallback, then swap. Fetching the woff2 at parse time (high priority) makes
+      it ready before first paint, killing that fallback flash. `crossorigin` is
+      required so this request matches the later anonymous-CORS font fetch.
+    -->
+    <link
+      rel="preload"
+      href="/fonts/press-start-2p-latin-400.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <title>LivePlace — Canvas collaboratif Twitch</title>
+    <meta name="description" content="Pose tes pixels sur la fresque collaborative en direct sur Twitch. Canvas de pixels temps réel." />
+    <!-- Open Graph (FEN-373, FEN-396) — brand fallback for all SPA routes; canvas pages get
+         dynamic tags via the /api/og/c/:slug Convex endpoint (bot UA → Caddy rewrite).
+         og:image must be an absolute URL (platforms reject relative paths) and PNG/JPG
+         (SVG is not rendered by Facebook, Twitter/X, or Discord). -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="LivePlace" />
+    <meta property="og:title" content="LivePlace — Canvas collaboratif Twitch" />
+    <meta property="og:description" content="Pose tes pixels sur la fresque collaborative en direct sur Twitch. Canvas de pixels temps réel." />
+    <meta property="og:image" content="https://liveplace.tv/og-brand.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="LivePlace — Canvas collaboratif Twitch" />
+    <meta name="twitter:description" content="Pose tes pixels sur la fresque collaborative en direct sur Twitch. Canvas de pixels temps réel." />
+    <meta name="twitter:image" content="https://liveplace.tv/og-brand.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

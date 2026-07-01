@@ -1,0 +1,144 @@
+/*
+ * G6 — Home live-discovery page styles (FEN-611).
+ *
+ * Token-only: every value reads a CSS custom property from tokens.css.
+ * No hard-coded colours/space/radius. Arcade direction handled automatically
+ * by [data-direction="fun"] in tokens.css (--da-radius-card 6px, etc.).
+ *
+ * WARNING (FEN-326 parity): keep this block free of apostrophes, quote chars,
+ * and nested comment markers so the Tailwind v4 parser never truncates :root.
+ */
+
+/* ======================================================================== */
+/* Page shell                                                                */
+/* ======================================================================== */
+
+.home-discovery {
+  min-height: 100dvh;
+  background: var(--ui-bg);
+  display: flex;
+  flex-direction: column;
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+}
+
+/* Sticky opaque topbar (AC5 gallery link) */
+.home-topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-dock);
+  background: var(--ui-surface);
+  border-bottom: var(--border-w-strong) solid var(--ui-border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-6);
+  height: 56px;
+}
+.home-topbar__brand {
+  flex: 1;
+}
+.home-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ======================================================================== */
+/* Hero section                                                              */
+/* ======================================================================== */
+
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-12) var(--space-6);
+  gap: var(--space-4);
+  max-width: 640px;
+  margin: 0 auto;
+  width: 100%;
+}
+.home-hero__kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: var(--da-radius-card);
+  border: var(--border-w) solid var(--ui-border);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.home-hero__title {
+  font-size: var(--text-3xl);
+  line-height: var(--text-3xl-lh);
+  font-weight: var(--weight-bold);
+  margin: 0;
+  color: var(--ui-text);
+}
+.home-hero__subtitle {
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+  color: var(--ui-text-secondary);
+  margin: 0;
+}
+/* ======================================================================== */
+/* Discovery content                                                         */
+/* ======================================================================== */
+
+.home-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+  padding: var(--space-8) var(--space-6) var(--space-16);
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* ======================================================================== */
+/* Rail header                                                               */
+/* ======================================================================== */
+
+.home-rail__header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.home-rail__title {
+  font-size: var(--text-xl);
+  line-height: var(--text-xl-lh);
+  font-weight: var(--weight-bold);
+  margin: 0;
+  color: var(--ui-text);
+}
+/* ======================================================================== */
+/* Responsive — mobile (≤ 768px)                                            */
+/* ======================================================================== */
+
+@media (max-width: 768px) {
+  .home-topbar {
+    padding: 0 var(--space-4);
+  }
+  /* Hide the topbar auth button on mobile: the Twitch OAuth button at its
+     natural width overflows the topbar on 360-430 px viewports (FEN-326). */
+  .home-topbar__actions {
+    display: none;
+  }
+  .home-hero {
+    padding: var(--space-8) var(--space-4);
+  }
+  .home-hero__title {
+    font-size: var(--text-2xl);
+    line-height: var(--text-2xl-lh);
+  }
+  .home-content {
+    padding: var(--space-6) var(--space-4) var(--space-12);
+    gap: var(--space-8);
+  }
+}

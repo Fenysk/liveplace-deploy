@@ -1,0 +1,107 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DEDICATED STRESS-GATEWAY overlay (FEN-1279 / FEN-1280).
+#
+# Adds a SECOND gateway + worker pair to the PROD compose project so the stress
+# test hits the REAL shared hot path (prod Redis place.lua/gauge + prod Convex
+# worker drain = the R1/R2 risk we want to measure) while keeping ALL writes off
+# the live `default` art.
+#
+# WHY THIS EXISTS — the prod gateway is single-canvas: it serves whatever
+# GATEWAY_CANVAS_ID it was started with (prod = `default`) and IGNORES the WS
+# path slug (apps/gateway/src/gateway.ts + config.ts:131). So a "throwaway slug
+# in the URL" does NOT isolate writes — wss://liveplace.tv/ws/stress-... would
+# still write to the live `default` canvas. Isolation MUST be at the gateway /
+# canvas-id level, not the URL. (Founding-Eng correction, FEN-1280.)
+#
+# ISOLATION GUARANTEES
+#   - Writes land in Redis  : canvas:${STRESS_CANVAS_ID}:*   (NOT canvas:default:*)
+#   - Writes land in Convex : placements by users loadtest:user:*  → filterable / cleanable
+#   - Live `default` canvas : UNTOUCHED (own gateway, own worker, own slug)
+#   - Auth                  : per-user HS256 dev-JWT (sub=loadtest:user:N) signed
+#                             with GATEWAY_DEV_JWT_SECRET → each actor its own
+#                             gauge bucket (NOT GATEWAY_AUTH_DISABLED, which would
+#                             collapse the whole fleet onto one shared gauge:anon).
+#
+# BRING UP (targets ONLY the new services — does NOT recreate prod gateway/web):
+#   STRESS_CANVAS_ID=stress-20260628 GATEWAY_DEV_JWT_SECRET=<high-entropy> \
+#     docker compose -f docker-compose.yml -f docker-compose.stress.yml \
+#     up -d --no-deps --build gateway-stress worker-stress
+#
+# TEAR DOWN:
+#   docker compose -f docker-compose.yml -f docker-compose.stress.yml \
+#     rm -sf gateway-stress worker-stress
+#   # then rotate GATEWAY_DEV_JWT_SECRET and run the Convex cleanup of
+#   # canvas=${STRESS_CANVAS_ID} (Dev Full-stack) — see docs/runbooks/stress-test.md §4.3.
+#
+# REACHING IT FROM THE LOAD DRIVER
+#   - Runner CO-LOCATED on the NAS / same private net (PREFERRED): hit the host
+#     port directly — ws://<nas-host>:8090/ws — no public TLS, dev secret never
+#     publicly reachable, no Caddy change.
+#   - Runner on a SEPARATE cloud VM: add a TEMPORARY Caddy route
+#     `stress.liveplace.tv -> gateway-stress:8080` for the window only, then
+#     remove it. (Exposes dev-JWT auth publicly → keep the secret high-entropy,
+#     ephemeral, and rotate immediately after the run.)
+#
+# NEVER leave this overlay running outside an approved, gated stress window.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  gateway-stress:
+    mem_limit: 512m
+    mem_reservation: 128m
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    env_file: [.env]            # inherit prod Redis/Convex/JWT wiring
+    environment:
+      # Same prod Redis + Convex as the live gateway (shared hot path is the point).
+      - REDIS_URL=redis://redis:6379
+      - CONVEX_JWKS_URL=http://convex-backend:3211/api/auth/convex/jwks
+      - GATEWAY_JWT_AUDIENCE=convex
+      # ISOLATION: distinct canvas slug → distinct Redis keyspace + Convex canvas.
+      # Default is intentionally a placeholder that fails loudly if unset, so we
+      # can NEVER accidentally inherit prod's `default`.
+      - GATEWAY_CANVAS_ID=${STRESS_CANVAS_ID:?set STRESS_CANVAS_ID=stress-YYYYMMDD}
+      # AUTH: per-user dev-JWT (NOT GATEWAY_AUTH_DISABLED). Each loadtest:user:N
+      # gets its own gauge bucket. Required for a realistic ~10-20% active-placer
+      # mix; absent => tokenless sockets are read-only (auth.ts CA5) and never place.
+      - GATEWAY_DEV_JWT_SECRET=${GATEWAY_DEV_JWT_SECRET:?set GATEWAY_DEV_JWT_SECRET}
+      # Leave GATEWAY_JWT_ISSUER unset → gateway skips `iss` check for dev-JWTs
+      # (config.ts) while still enforcing signature + aud.
+      - GATEWAY_JWT_ISSUER=
+      # Kill-switch parity with prod: same freeze seam (POST /ws/internal/freeze).
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+    ports:
+      # Distinct host port so the driver / a temp Caddy route can reach it without
+      # touching prod's :8080 mapping.
+      - "8090:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: "no"   # disposable: do NOT auto-restart a stress rig
+
+  worker-stress:
+    mem_limit: 512m
+    mem_reservation: 128m
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: [.env]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+      # ADR-0001: worker slug MUST equal its gateway's. Drains
+      # canvas:${STRESS_CANVAS_ID}:stream → prod Convex (exercises the REAL drain
+      # path = R2 risk), separate from the prod worker draining `default`.
+      - GATEWAY_CANVAS_ID=${STRESS_CANVAS_ID:?set STRESS_CANVAS_ID=stress-YYYYMMDD}
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: "no"

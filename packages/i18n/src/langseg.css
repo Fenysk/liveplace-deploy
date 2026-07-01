@@ -1,0 +1,60 @@
+/*
+ * Segmented language control (FEN-867).
+ *
+ * Self-contained; imported by the package so it loads on every surface that
+ * renders LanguageSwitcher (app shell, canvas topbar). Token-only — zero
+ * hard-coded colours/space/radius (AC6). Touch floor set via --target-min (44px).
+ */
+
+/* Container: pill-track holding all segments. */
+.lp-langseg {
+  display: inline-flex;
+  align-items: center;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--da-radius-control);
+  gap: var(--space-1);
+  padding: var(--space-1);
+}
+
+/* Each locale segment. */
+.lp-langseg-opt {
+  min-height: var(--target-min);
+  min-width: var(--target-min);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: calc(var(--da-radius-control) - 2px);
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+/* Active segment: visually distinct via accent fill (AC-B1/B2). */
+.lp-langseg-opt[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-on-accent);
+  font-weight: var(--weight-semibold);
+}
+
+/* Hover: idle segments get a subtle tint (never the active one). */
+.lp-langseg-opt:not([aria-pressed="true"]):hover {
+  background: var(--gray-100);
+  color: var(--ui-text);
+}
+
+/* Focus ring (AA ≥3:1 via --focus-ring). */
+.lp-langseg-opt:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}

@@ -1,0 +1,343 @@
+# Twitch Canvas — full stack for NAS deploy. `docker compose up` (no params)
+# brings up Redis, self-hosted Convex, the WS gateway, the persistence worker,
+# the static web SPA, and a Caddy TLS reverse proxy. Multi-arch (arm64 NAS +
+# amd64). Config/secrets come from .env (copy .env.example -> .env). Secrets are
+# never baked into images.
+#
+# Boot order (FEN-69): redis + convex-backend go healthy, then `convex-deploy`
+# pushes the Convex functions once and exits; gateway/worker only start after
+# that completes so they connect to a deployed backend.
+services:
+  redis:
+    # FEN-671: bounded memory on the ~6GB SHARED Coolify host (4 CPU). Without
+    # per-service limits a single runaway service exhausts host RAM and the kernel
+    # OOM-killer reaps a RANDOM victim (often the proxy/Traefik) → site-wide 503
+    # crash/restart flapping (observed FEN-608 overnight, FEN-671). These are
+    # generous CEILINGS (steady-state usage is far lower at current scale): they
+    # only bite on pathological growth, turning a host-wide OOM storm into an
+    # isolated, self-restarting (restart: unless-stopped) container kill.
+    mem_limit: 384m
+    image: redis:7-alpine
+    # AOF persistence on a durable volume (R2: survive restart, keep stream backlog).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data-fen435:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  convex-backend:
+    # FEN-671: heaviest service (Rust backend + SQLite + JS isolates) → most
+    # generous ceiling. 2g is comfortable headroom at current (post-FEN-435 flush)
+    # scale; mem_reservation gives the scheduler a soft floor.
+    mem_limit: 2g
+    mem_reservation: 512m
+    image: ghcr.io/get-convex/convex-backend:latest
+    env_file: [.env]
+    environment:
+      - INSTANCE_NAME=twitch-canvas
+      - INSTANCE_SECRET=${CONVEX_INSTANCE_SECRET}
+      # Public origins the browser reaches through the proxy (see infra/Caddyfile).
+      - CONVEX_CLOUD_ORIGIN=${VITE_CONVEX_URL}
+      - CONVEX_SITE_ORIGIN=${VITE_CONVEX_SITE_URL}
+    volumes:
+      - convex-data-fen435:/convex/data
+    healthcheck:
+      # The convex-backend image ships curl (matches upstream self-hosting compose);
+      # it has no busybox/wget, so wget here would never go healthy.
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # One-shot: mint the self-hosted Convex admin key WITHOUT a manual terminal
+  # (FEN-92). The admin key is a deterministic function of (INSTANCE_NAME,
+  # INSTANCE_SECRET) — the backend validates any key minted from the same
+  # INSTANCE_SECRET it runs with. So we run `generate_admin_key.sh` (baked into
+  # the convex-backend image; same script the docs invoke via `docker compose
+  # exec backend ./generate_admin_key.sh`) from a throwaway container that shares
+  # INSTANCE_NAME + INSTANCE_SECRET with convex-backend, and write the key to a
+  # shared volume for convex-deploy to consume. This removes the only manual,
+  # not-yet-automated step in the bring-up: no Coolify exec / UI terminal needed.
+  #
+  # ALWAYS exits 0: if the key cannot be minted (script moved in a future image,
+  # etc.) the stack must still come up in anonymous/bootstrap mode rather than
+  # hard-failing `up` (gateway/worker gate on convex-deploy completing). A missing
+  # key then degrades to "no persistence", which is observable, not a dead stack.
+  # One-shot: mints the self-hosted Convex admin key from INSTANCE_SECRET without
+  # any manual terminal (FEN-92). Built from infra/convex-admin-key/Dockerfile
+  # (same base image as convex-backend, so generate_admin_key.sh is present).
+  # Script is in infra/convex-admin-key/mint.sh — no inline block scalar, no `$$`
+  # escaping hazards. Writes the key to /admin/admin_key on the convex-admin volume
+  # which convex-deploy reads. ALWAYS exits 0 → degrades to anonymous on failure.
+  convex-admin-key:
+    mem_limit: 256m   # FEN-671: one-shot (restart: no); modest ceiling
+    build:
+      context: .
+      dockerfile: infra/convex-admin-key/Dockerfile
+    env_file: [.env]
+    environment:
+      # MUST match convex-backend exactly — key is signed with the instance secret.
+      - INSTANCE_NAME=twitch-canvas
+      - INSTANCE_SECRET=${CONVEX_INSTANCE_SECRET}
+    volumes:
+      - convex-admin:/admin
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: deploy the Convex functions into the self-hosted backend, then seed
+  # the deployment env vars they read (incl. the F8 GATEWAY_INTERNAL_* seam — see
+  # apps/convex/deploy.sh), then exit. Self-hosted Convex keeps function env IN
+  # the deployment, so env_file alone never reaches process.env; deploy.sh pushes
+  # it. Everything that talks to Convex depends on this completing successfully.
+  # Reads the admin key minted by convex-admin-key from the shared volume when no
+  # CONVEX_SELF_HOSTED_ADMIN_KEY is supplied (FEN-92).
+  convex-deploy:
+    mem_limit: 1g   # FEN-671: one-shot push/codegen (restart: no) needs headroom
+    build:
+      context: .
+      dockerfile: apps/convex/Dockerfile
+    env_file: [.env]
+    environment:
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+    volumes:
+      - convex-admin:/admin:ro
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+      # FEN-96: ORDER on convex-admin-key (it must start first to mint the key),
+      # but do NOT gate on it COMPLETING SUCCESSFULLY. `service_completed_successfully`
+      # makes `docker compose up -d` BLOCK on the one-shot and PROPAGATE its exit
+      # code: when convex-admin-key exited non-zero, `up -d` returned `exit 1` and
+      # Coolify marked the (otherwise healthy, serving) deploy `failed` — the
+      # misleading-status bug. The admin key is best-effort persistence wiring, never
+      # a reason to fail the deploy. `service_started` keeps the boot order without
+      # letting a best-effort one-shot fail the stack; deploy.sh below polls the
+      # shared /admin/admin_key volume so it still picks the key up once minted.
+      # Genuine infra failures are still caught: convex-deploy/worker gate on
+      # convex-backend `service_healthy`, so an unhealthy backend (or a failed
+      # image build) still fails `up -d` honestly.
+      convex-admin-key:
+        condition: service_started
+    restart: "no"
+
+  gateway:
+    mem_limit: 512m   # FEN-671: Node WS hot path (Redis-only)
+    mem_reservation: 128m
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    env_file: [.env]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      # F8 moderation internal seam (FEN-19): authorises Convex's POST
+      # /internal/{moderate,ban,freeze,flush} calls. Unset => the seam is disabled
+      # (routes answer 404); wrong/missing Bearer => 401. Also flows via env_file;
+      # kept explicit so the security-sensitive wiring is auditable here.
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+      # JWT verify config for authenticated sockets (CA3, ADR-0002 / FEN-211).
+      # Authoritative HERE (not just .env) so a stale Coolify app-env value can
+      # never re-break it — these are the values better-auth actually emits:
+      #   - JWKS lives at `/api/auth/convex/jwks` on the Convex SITE origin
+      #     (Caddy: /api/auth* -> convex-backend:3211), NOT at `.well-known`
+      #     (that path returns the SPA HTML -> no key for the `kid` -> jose 401).
+      #     Internal name resolves on the compose network, no TLS/proxy hop.
+      #   - `iss` is the public site URL (better-auth baseURL = PUBLIC_SITE_URL =
+      #     BETTER_AUTH_URL). Derived so it follows the deployment's domain; if
+      #     unset (e.g. anon stack) it is empty -> gateway skips the `iss` check
+      #     (apps/gateway/src/config.ts) while still enforcing signature + aud.
+      #   - `aud` is the fixed `convex` audience better-auth stamps.
+      - CONVEX_JWKS_URL=http://convex-backend:3211/api/auth/convex/jwks
+      - GATEWAY_JWT_ISSUER=${PUBLIC_SITE_URL:-}
+      - GATEWAY_JWT_AUDIENCE=convex
+      # Outreach funnel attribution (FEN-242/FEN-243). PUBLIC_SITE_URL is the 302
+      # target of the /r?ref= tracked DM link (config.ts attribution.redirectUrl);
+      # GATEWAY_INTERNAL_SECRET (above) doubles as the /r/report Bearer guard. Both
+      # also arrive via env_file .env — pinned explicitly so a stale Coolify app-env
+      # can't leave the redirect pointing at "/" or the report disabled (404).
+      - PUBLIC_SITE_URL=${PUBLIC_SITE_URL:-}
+    depends_on:
+      # FEN-93: the gateway is the PUBLIC WS hot path and is Redis-only (FEN-50);
+      # its sole Convex use (gauge bonus) degrades to 0 when Convex is absent. So
+      # it must NOT gate on the convex chain — otherwise an unhealthy convex-backend
+      # blocks convex-admin-key → convex-deploy → gateway → proxy and the WHOLE
+      # public stack 404s (observed: full-stack deploy failed, app "not running",
+      # every endpoint 404, while the anon stack — no convex gate — came up fine).
+      # Depend only on redis; convex/worker converge independently for persistence.
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # node:22-alpine ships busybox wget. The gateway answers 200 on any GET.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # Persistence worker (FEN-57): batch-flushes the Redis placement stream to
+  # Convex (worker:* seam), writes snapshots + gallery fields, rebuilds Redis on
+  # cold start. NOT on the hot path (G-A1); exposes no ports.
+  worker:
+    mem_limit: 512m   # FEN-671: Node batch flush (off hot path)
+    mem_reservation: 128m
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: [.env]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+      # ADR-0001: the worker's canvas slug MUST equal the gateway's. Both read the
+      # single GATEWAY_CANVAS_ID from the shared .env, so they match by construction.
+      # FEN-86: authenticates the worker to the `worker:run` Convex action that
+      # fronts the now-internal worker:* / canvases:setGalleryFields seam. Same
+      # secret deploy.sh already seeds into the Convex deployment for the F8
+      # moderation seam. Also flows via env_file; kept explicit so the
+      # security-sensitive wiring is auditable here (mirrors the gateway).
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+    depends_on:
+      # FEN-93: gate on a reachable backend (convex-backend healthy) but NOT on the
+      # convex-deploy one-shot — the worker tolerates undeployed Convex at startup
+      # (FEN-80) and `restart: unless-stopped` retries until functions are live. So
+      # the worker never blocks the public stack; if convex-backend never goes
+      # healthy, only the worker stays down (persistence off), not gateway/web/proxy.
+      redis:
+        condition: service_healthy
+      convex-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    mem_limit: 256m   # FEN-671: static SPA file server
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      # VITE_* are inlined at build time (public origins, not secrets).
+      args:
+        VITE_CONVEX_URL: ${VITE_CONVEX_URL}
+        VITE_CONVEX_SITE_URL: ${VITE_CONVEX_SITE_URL}
+    healthcheck:
+      # node:22-alpine static server answers 200 on /healthz.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # TLS reverse proxy. Routes /ws -> gateway, /api/auth -> convex site origin
+  # (Twitch callback), /convex -> convex cloud origin, everything else -> web.
+  proxy:
+    mem_limit: 128m   # FEN-671: Caddy reverse proxy
+    # Caddyfile is BAKED into the image (infra/proxy/Dockerfile). A bind-mount of
+    # ./infra/Caddyfile fails on Coolify (host-source auto-created as a dir →
+    # "mount a directory onto a file", FEN-80); baking is reproducible everywhere
+    # incl. the NAS. Build context = repo root so `infra/Caddyfile` resolves.
+    build:
+      context: .
+      dockerfile: infra/proxy/Dockerfile
+    environment:
+      # Site address decides scheme/port inside Caddy (see infra/Caddyfile).
+      # Default ':80' = reliable HTTP-only on all hosts (FEN-78 #4).
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    # On Coolify the edge Traefik routes the public domain to this container's
+    # INTERNAL :80 (via docker_compose_domains) — publishing host ports breaks that
+    # routing and yields a 404 at the public URL (FEN-92, mirrors the anon-compose
+    # fix 0ba0661). So expose :80 to the Coolify network instead of host-publishing.
+    # On a bare host (NAS) Traefik/Caddy still reaches the container on :80.
+    expose:
+      - "80"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    # FEN-1101: gate the edge on Caddy actually serving. Coolify/Traefik route the
+    # public domain to this container; a healthcheck lets the orchestrator hold
+    # traffic until Caddy answers (and lets `up -d` report the proxy healthy before
+    # the deploy is considered done), shrinking the rollover window. `/healthz`
+    # falls through Caddy to web:3000 (see infra/Caddyfile), so a 200 here proves
+    # the whole public path (edge → Caddy → web) is live, not just that Caddy booted.
+    # busybox `wget` ships in the caddy:2-alpine base — no extra image to pull.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    depends_on:
+      # FEN-93: only web + gateway (both Redis-only fast starts). NOT convex-backend
+      # — Caddy's /convex + /api/auth routes simply 502 while Convex converges, but
+      # the public site + WS path must serve regardless (decoupled from the convex
+      # chain so an unhealthy convex-backend can't 404 the whole stack).
+      - web
+      - gateway
+    restart: unless-stopped
+
+  # Convex auth warmup probe (FEN-570 — parent FEN-550 login-latency quick win).
+  #
+  # Convex Better-Auth routes are httpActions; their JS isolate is evicted after
+  # an idle window, so the FIRST login after a quiet period pays a ~0.5–2 s cold
+  # start, and login hits 3 auth routes in sequence — up to ~6 s added in the
+  # trough (FEN-550 diagnostic). This sidecar GETs a cheap, no-session auth route
+  # every AUTH_WARMUP_INTERVAL_SEC (default 240 s, under the eviction window) to
+  # keep that isolate hot, so the first real login is already warm.
+  #
+  # Image reuses redis:7-alpine — ALREADY pulled by the `redis` service, multi-arch
+  # (arm64 NAS + amd64), and ships busybox `wget` (the same tool the gateway
+  # healthcheck uses). No new image to pull = nothing extra to break on the NAS.
+  #
+  # FIRE-AND-FORGET by design: it NEVER gates traffic. A Caddy active `health_uri`
+  # was the obvious alternative but would pull the SINGLE convex-backend upstream
+  # out of rotation on a slow/non-2xx probe and 503 the whole auth+sync surface
+  # (blast radius); this sidecar only logs, so a failed/slow probe costs nothing.
+  # It hits convex-backend:3211 directly on the compose network (no proxy/TLS hop)
+  # so it warms the auth httpAction isolate, not Caddy. NOTHING depends on it, so
+  # it can never block gateway/web/proxy bring-up (FEN-93). Gates its OWN start on
+  # convex-backend being healthy (mirrors the worker), nothing more.
+  auth-warmup:
+    mem_limit: 64m   # FEN-671: tiny busybox wget loop sidecar
+    image: redis:7-alpine
+    environment:
+      # Cheap no-session Better-Auth route — `/ok` returns {"ok":true} 200. ANY
+      # path under /api/auth/* warms the same shared httpAction isolate, so the
+      # exact route is not load-bearing; override AUTH_WARMUP_URL to a different
+      # auth path (e.g. .../api/auth/get-session) if `/ok` ever moves.
+      - AUTH_WARMUP_URL=${AUTH_WARMUP_URL:-http://convex-backend:3211/api/auth/ok}
+      - AUTH_WARMUP_INTERVAL_SEC=${AUTH_WARMUP_INTERVAL_SEC:-240}
+    # `$$` -> literal `$` for the in-container shell (compose var-escaping).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[auth-warmup] warming $$AUTH_WARMUP_URL every $${AUTH_WARMUP_INTERVAL_SEC}s";
+        while true; do
+          if wget -q -T 10 -O /dev/null "$$AUTH_WARMUP_URL"; then s=ok; else s=fail; fi;
+          echo "[auth-warmup] $$(date -u +%FT%TZ) GET $$AUTH_WARMUP_URL -> $$s";
+          sleep "$$AUTH_WARMUP_INTERVAL_SEC";
+        done
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # FEN-435 cutover flush (AC-5, board-approved 2026-06-09): the stack was
+  # repointed from `redis-data` / `convex-data-2` to these FRESH volumes to start
+  # prod on a clean slate (empty Convex app+identity+_storage, empty Redis). The
+  # OLD volumes are intentionally LEFT ON DISK (orphaned, not referenced) as the
+  # full pre-flush backup / rollback (D3): to roll back, revert this rename and
+  # redeploy. Prune the old volumes only after CEO validation (FEN-436) confirms.
+  redis-data-fen435:
+  convex-data-fen435:
+  # Holds the in-stack-minted Convex admin key (FEN-92): convex-admin-key writes
+  # it, convex-deploy reads it. Not a secret store the operator manages — the key
+  # is re-derivable from CONVEX_INSTANCE_SECRET on every deploy.
+  convex-admin:
+  caddy-data:
+  caddy-config:

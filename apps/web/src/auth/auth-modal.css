@@ -1,0 +1,92 @@
+/*
+ * Pre-OAuth value modal — content styles only (FEN-580 / G1, FEN-1330 S2).
+ * FEN-1495: Neobrutalism finish — all hardcodes migrated to tokens.
+ *
+ * Structure, positioning, backdrop, safe-area padding, and animation are
+ * delegated to the BottomSheet socle (bottomSheet.css). Only close-button
+ * chrome and pre-OAuth copy typography live here.
+ *
+ * z-index: handled by BottomSheet (--z-sheet / z-index:50 on modal presentation).
+ */
+
+/* Close (×) — top-right corner, neutral label (AC9) */
+.lp-auth-modal .lp-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: var(--target-min);
+  height: var(--target-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: var(--border-w) solid transparent;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ui-text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.lp-auth-modal .lp-modal__close:hover {
+  color: var(--ui-text);
+  border-color: var(--ui-border);
+  box-shadow: var(--elev-1);
+}
+
+.lp-auth-modal .lp-modal__close:active {
+  color: var(--ui-text);
+  border-color: var(--ui-border);
+  box-shadow: var(--elev-press);
+  transform: translateY(1px);
+}
+
+/* Title — leave room for the close button */
+.lp-auth-modal .lp-modal__title {
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-lh);
+  font-weight: var(--weight-bold);
+  color: var(--ui-text);
+  margin: 0;
+  padding-right: 32px;
+}
+
+/* Value proposition line */
+.lp-auth-modal .lp-modal__value {
+  font-size: var(--text-base);
+  line-height: var(--text-base-lh);
+  color: var(--ui-text);
+  margin: 0;
+}
+
+/* Reassurance line — secondary emphasis */
+.lp-auth-modal .lp-modal__reassurance {
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-lh);
+  color: var(--ui-text-secondary);
+  margin: 0;
+}
+
+/* CTA — full-width on all viewports (spec §E5) */
+.lp-auth-modal .lp-modal__cta {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* Desktop card: full-box Neobrutalism border (bottomSheet base gives mobile-only top-border). */
+@media (min-width: 1024px) {
+  .lp-auth-modal.lp-sheet {
+    border: var(--border-w) solid var(--ui-border);
+  }
+}
+
+/* Mobile: close × is replaced by the grip handle (A3 — FEN-1381). Desktop keeps × as the only affordance. */
+@media (max-width: 1023px) {
+  .lp-auth-modal .lp-modal__close { display: none; }
+}

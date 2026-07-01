@@ -1,0 +1,44 @@
+/*
+ * StudioPanel — content CSS (FEN-1338 · S1).
+ *
+ * Chrome (backdrop / handle / drag / animations / sizing / positioning)
+ * géré par le socle BottomSheet (.lp-sheet / bottomSheet.css).
+ * Ce fichier ne garde que le style de contenu propre à la feature studio.
+ *
+ * Importé SEULEMENT par StudioPanel.tsx, jamais par ObsView.
+ */
+
+/* ---- Close button ------------------------------------------------------- */
+.lp-studio-panel__close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  width: var(--target-min);
+  height: var(--target-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ui-text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0;
+}
+
+.lp-studio-panel__close:hover {
+  background: var(--ui-bg);
+  color: var(--ui-text);
+}
+
+.lp-studio-panel__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Mobile: close × is replaced by the grip handle (A3 — FEN-1381). Desktop keeps × as the only affordance. */
+@media (max-width: 1023px) {
+  .lp-studio-panel__close { display: none; }
+}

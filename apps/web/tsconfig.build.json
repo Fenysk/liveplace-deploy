@@ -1,0 +1,19 @@
+{
+  // Image/CI build typecheck. Identical to tsconfig.json but drops the *.test.ts
+  // files: test files import modules with explicit `.ts` extensions and reference
+  // node:test / node:assert which have no bearing on the production bundle.
+  // Excluding them keeps CI fast and avoids testing-framework bleed into the
+  // production type surface. `pnpm test` still runs them via the node test runner.
+  // (FEN-78 #2 — allowImportingTsExtensions now enabled in tsconfig.json; FEN-1470)
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The SPA is a noEmit leaf — it never produces .d.ts. The base config turns
+    // `declaration` on (for the library packages), which makes tsc run the
+    // declaration-portability check and trip TS2742 on better-auth's inferred
+    // `authClient` type. Disable it here so the image build typecheck is clean.
+    // declarationMap follows declaration (TS5069 if left on alone).
+    "declaration": false,
+    "declarationMap": false
+  },
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

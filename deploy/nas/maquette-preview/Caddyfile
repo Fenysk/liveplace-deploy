@@ -1,0 +1,21 @@
+# Static preview server for design maquettes (FEN-1478).
+# Pure file_server — no app, no upstream, no TLS (the .nas dns-router terminates
+# the edge in front of us). Autonomous maquettes (fonts inlined as base64) need
+# nothing more than correct MIME + a health endpoint for the compose healthcheck.
+{
+	admin off          # no admin API surface inside this throwaway preview box
+	auto_https off     # HTTP only; the host dns-router-caddy is the edge
+}
+
+:80 {
+	encode gzip zstd
+
+	# Health endpoint for the docker healthcheck (must precede file_server).
+	@health path /healthz
+	respond @health "ok" 200
+
+	root * /srv
+	file_server {
+		index index.html
+	}
+}

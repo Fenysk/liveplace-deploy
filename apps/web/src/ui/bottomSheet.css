@@ -1,0 +1,284 @@
+/*
+ * BottomSheet — socle CSS commun (FEN-1330/FEN-1336 S0).
+ *
+ * Toute la CSS de sheet : anatomie + variantes desktop.
+ * Importé uniquement par BottomSheet.tsx ; jamais directement par une feature.
+ *
+ * Tokens de sheet (ratifiés par UI Designer, Stream D) :
+ *   --sheet-dur      durée de l'animation slide-in/out    (défaut = --dur-base 220ms)
+ *   --sheet-ease     easing de l'animation               (défaut = --ease-out)
+ *   --radius-sheet   coins haut de la sheet mobile        (défaut = --da-radius-card)
+ *
+ * ⚠ WARNING (FEN-326) : pas d'apostrophes, guillemets ni commentaires imbriqués
+ * dans le bloc :root — le parseur Tailwind v4 traque l'état des commentaires.
+ */
+
+:root {
+  --sheet-dur: var(--dur-base);
+  --sheet-ease: var(--ease-out);
+  --radius-sheet: var(--da-radius-card);
+}
+
+/* ── Backdrop (modal uniquement) ─────────────────────────────────────────── */
+.lp-sheet__backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--sheet-backdrop);
+  z-index: 49;
+}
+
+/* ── Conteneur de sheet ───────────────────────────────────────────────────── */
+.lp-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: none;
+  /* Padding interne : safe-area en bas via --safe-bottom (AC4, pas d'env() brut). */
+  padding: var(--space-4) var(--space-3) calc(var(--space-3) + var(--safe-bottom));
+  /* top padding supprimé quand la poignée est montée (elle fournit sa propre hauteur). */
+  background: var(--ui-surface-raised);
+  /* FEN-1486: top border only — no lateral borders on the sheet */
+  border: none;
+  border-top: 1px solid var(--ui-border);
+  border-top-left-radius: var(--radius-sheet);
+  border-top-right-radius: var(--radius-sheet);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: var(--elev-3);
+  /* Hauteur plafonnée, scroll interne (AC6). svh = stable sous barre d'adresse. */
+  max-height: 80vh;
+  max-height: 80svh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-sheet);
+  /* Animation d'ouverture/fermeture unique (AC5). */
+  transition: transform var(--sheet-dur) var(--sheet-ease);
+}
+
+/* Quand la poignée est montée, supprimer le padding-top (elle fournit son espacement). */
+.lp-sheet[data-has-handle="true"] {
+  padding-top: 0;
+}
+
+/* Mode modal : z-index au-dessus des toasts (AC8). */
+.lp-sheet[data-presentation="modal"] {
+  z-index: 50;
+}
+
+/* Fermée (modeless) : translate hors de la vue. */
+.lp-sheet[data-open="false"] {
+  transform: translateY(100%);
+}
+
+/* ── Poignée (grip de R, tokens = R) ─────────────────────────────────────── */
+/* AC2 : markup/tokens identiques à R pour homogénéité visuelle. */
+.lp-sheet .lp-panel-handle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: calc(var(--target-min) + var(--space-3));
+  padding: var(--space-4) 0 var(--space-2);
+  background: transparent;
+  border: none;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  /* Supprime l'outline dans tous les états interactifs. L'élargissement du grip
+     est l'affordance a11y visuelle pour les utilisateurs clavier (FEN-1153). */
+  outline: none;
+}
+
+.lp-sheet .lp-panel-handle:focus,
+.lp-sheet .lp-panel-handle:focus-visible,
+.lp-sheet .lp-panel-handle:active {
+  outline: none;
+}
+
+.lp-sheet .lp-panel-handle-grip {
+  display: block;
+  width: var(--space-10);
+  height: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ui-text) 22%, transparent);
+  transition: width 150ms ease;
+}
+
+.lp-sheet .lp-panel-handle:hover .lp-panel-handle-grip,
+.lp-sheet .lp-panel-handle:focus-visible .lp-panel-handle-grip {
+  width: var(--space-12);
+}
+
+/* ── Reduced-motion (AC5) ────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .lp-sheet {
+    transition: none;
+  }
+  .lp-sheet .lp-panel-handle-grip {
+    transition: none;
+  }
+}
+
+/* ── Variantes desktop >= 1024px (AC7) ───────────────────────────────────── */
+/*
+ * Le socle n'impose PAS un seul layout desktop. Il pose data-desktop="…" et
+ * chaque variante transpose le CSS desktop existant de la feature correspondante
+ * (R/S/A). Le chrome mobile (poignée/drag/anim translate) est neutralisé.
+ *
+ * sidebar (R) : colonne statique ≥1024px (le HUD rejoint le flex-row de .lp-app).
+ * drawer  (S) : tiroir droit fixe (FEN-120).
+ * card    (A) : carte centrée + backdrop (FEN-271).
+ * none    (G) : aucun override desktop.
+ */
+@media (min-width: 1024px) {
+
+  /* ---- sidebar (R → CanvasView HUD) --------------------------------------- */
+  /* Transposition du bloc .lp-hud @ >=1024px de canvas.css (FEN-1079 / FEN-1052).
+     S3 (migration R) supprimera ce CSS de canvas.css une fois le socle adopté. */
+  .lp-sheet[data-desktop="sidebar"] {
+    position: static;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    top: auto;
+    transform: none;
+    transition: none;
+    width: var(--rail-w, 288px);
+    flex-shrink: 0;
+    height: 100%;
+    min-width: 0;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+    border-left: 1px solid var(--ui-border);
+    background: var(--ui-surface);
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: var(--space-5);
+    overflow-y: auto;
+    overflow-x: hidden;
+    pointer-events: auto;
+    z-index: var(--z-dock);
+  }
+
+  /* La poignée est un affordance mobile uniquement — masquée sur desktop. */
+  .lp-sheet[data-desktop="sidebar"] .lp-panel-handle {
+    display: none;
+  }
+
+  /* ---- drawer (S → StudioPanel) ----------------------------------------- */
+  /* Transposition du bloc .lp-studio-panel @ >=1024px de studioPanel.css.
+     S1 (migration S) affinera/supprimera l'ancien CSS une fois le socle adopté. */
+  .lp-sheet[data-desktop="drawer"] {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    width: clamp(320px, 30vw, 480px);
+    max-height: none;
+    border-radius: 0;
+    border-left: 1px solid var(--ui-border);
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    padding: var(--space-6);
+    transform: translateX(0);
+    transition: transform var(--sheet-dur) var(--sheet-ease);
+  }
+
+  .lp-sheet[data-desktop="drawer"][data-open="false"] {
+    transform: translateX(100%);
+  }
+
+  .lp-sheet[data-desktop="drawer"] .lp-panel-handle {
+    display: none;
+  }
+
+  /* Le backdrop drawer est transparent sur desktop (panel overlay partiel). */
+  .lp-sheet[data-desktop="drawer"] ~ .lp-sheet__backdrop,
+  .lp-sheet__backdrop[data-desktop="drawer"] {
+    background: transparent;
+  }
+
+  /* ---- card (A → AuthModal) ---------------------------------------------- */
+  /* Transposition de .lp-modal-backdrop + .lp-modal @ desktop de auth-modal.css.
+     S2 (migration A) affinera/supprimera l'ancien CSS une fois le socle adopté. */
+  .lp-sheet[data-desktop="card"] {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    /* translateY drag-dismiss override par style inline — pas de !important ici ;
+       on réinitialise la base et l'inline style reprend la main. */
+    transform: translate(-50%, -50%);
+    right: auto;
+    bottom: auto;
+    width: min(420px, calc(100vw - var(--space-8)));
+    max-height: 80svh;
+    max-height: 80vh;
+    border-radius: var(--da-radius-card);
+    padding: var(--space-6);
+    overflow-y: auto;
+  }
+
+  .lp-sheet[data-desktop="card"] .lp-panel-handle {
+    display: none;
+  }
+
+  /* ---- none (G → Gate onboarding) --------------------------------------- */
+  /* Aucun override desktop : le socle reste une sheet mobile standard. */
+
+  /* ---- bubble (FEN-1490 — bulle flottante canvas desktop) --------------- */
+  /* Position fixe centrée horizontalement, 16px du bord bas. Flotte
+     AU-DESSUS du canvas ; canvas non redimensionné (AC6). Le compact state
+     est géré par canvas.css (.lp-bubble-body collapse) — la bulle reste
+     toujours visible via l'override du translateY(100%) de base ci-dessous. */
+  .lp-sheet[data-desktop="bubble"] {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    right: auto;
+    top: auto;
+    transform: translateX(-50%);
+    width: min(520px, calc(100vw - 32px));
+    max-width: none;
+    max-height: 80svh;
+    max-height: 80vh;
+    border-radius: var(--da-radius-card);
+    border: var(--border-w) solid var(--ui-border);
+    background: var(--ui-surface-raised);
+    box-shadow: var(--elev-3);
+    padding: 0;
+    overflow: hidden;
+    transition: box-shadow var(--sheet-dur) var(--sheet-ease);
+    z-index: var(--z-sheet);
+  }
+
+  /* Override le translateY(100%) de base (lp-sheet[data-open="false"]) :
+     la bulle reste centrée même fermée — l'état compact masque .lp-bubble-body. */
+  .lp-sheet[data-desktop="bubble"][data-open="false"] {
+    transform: translateX(-50%);
+  }
+
+  /* Pas de poignée de drag sur desktop */
+  .lp-sheet[data-desktop="bubble"] .lp-panel-handle {
+    display: none;
+  }
+
+  /* ---- Reduced-motion dans le bloc desktop -------------------------------- */
+  @media (prefers-reduced-motion: reduce) {
+    .lp-sheet[data-desktop="drawer"] {
+      transition: none;
+    }
+    .lp-sheet[data-desktop="bubble"] {
+      transition: none;
+    }
+  }
+}

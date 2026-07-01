@@ -1,0 +1,101 @@
+/*
+ * Arcade connexion-Twitch control — Lot B (FEN-270).
+ *
+ * Token-only styling (AC6): no raw colour/size/radius lives here. The Twitch
+ * brand-lock (#9146FF) flows exclusively through `--twitch-purple` — the ONE
+ * place that hex is defined (tokens.css) — never re-typed. Hover/active darken
+ * the lock by mixing toward the ink token, so no new literal is introduced.
+ *
+ * The connect CTA reuses the Foundation `Button` atom unchanged (AC1/AC2) and
+ * only overrides the Button's own colour custom-properties, so every other
+ * Button behaviour — ≥44px hit area, focus ring, motion, loading spinner — is
+ * inherited verbatim.
+ */
+
+/* Twitch brand CTA: Button atom, brand-locked to Twitch purple. Ink border for Neobrutalism (FEN-1495). */
+.lp-auth__twitch {
+  --_btn-bg: var(--twitch-purple);
+  --_btn-fg: var(--on-twitch); /* FEN-1506: token instead of --gray-0 hardcoded (white 4.63:1) */
+  --_btn-bg-hover: color-mix(in srgb, var(--twitch-purple) 88%, var(--gray-900));
+  --_btn-bg-active: color-mix(in srgb, var(--twitch-purple) 78%, var(--gray-900));
+  --_btn-border: var(--ui-border);
+}
+
+/* Signed-in identity row: avatar + name(+profile link) + sign-out. */
+.lp-auth {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Transparent in default topbar context; becomes its own row inside .lp-menu-section. */
+.lp-auth__identity {
+  display: contents;
+}
+
+.lp-auth__avatar {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-pill);
+  border: var(--border-w) solid var(--ui-border);
+  object-fit: cover;
+  flex: none;
+}
+
+/* Single canvas link wrapping avatar + name (C-2). WCAG 2.5.5: ≥44px hit area. */
+a.lp-auth__canvas-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--space-12);
+  padding-inline: var(--space-1);
+  color: var(--ui-text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+@media (min-width: 1024px) {
+  a.lp-auth__canvas-link:hover {
+    text-decoration: underline;
+  }
+}
+
+.lp-auth__name {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ui-text);
+}
+
+/* ── In-menu adaptations (AC-C1/C2/C3 — FEN-868) ───────────────────────── */
+
+/* Account block stacks as a distinct column section (AC-C1). */
+.lp-menu-section .lp-auth {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Identity row: avatar + name as a menu row. */
+.lp-menu-section .lp-auth__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding-inline: var(--space-3);
+}
+
+/* Sign-out: de-emphasised, left-aligned, secondary text colour (AC-C2). */
+.lp-menu-section .lp-auth__signout {
+  width: 100%;
+  justify-content: flex-start;
+  padding-inline: var(--space-3);
+  --_btn-fg: var(--ui-text-secondary);
+  font-size: var(--text-sm);
+}
+
+/* Anonymous sign-in CTA: full-width in menu context (AC-C3). */
+.lp-menu-section .lp-auth__twitch {
+  width: 100%;
+  justify-content: flex-start;
+}

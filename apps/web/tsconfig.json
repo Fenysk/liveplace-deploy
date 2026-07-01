@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "react", "react-dom"],
+    "noEmit": true,
+    // allowImportingTsExtensions: safe here because noEmit:true + Vite (bundler)
+    // handle all module resolution. Needed so production files that are exercised
+    // by the node test runner (--experimental-transform-types) can import sibling
+    // .ts files without .js aliasing, which Node.js ESM does not remap at runtime.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}
