@@ -1,0 +1,44 @@
+/*
+ * Pre-OAuth value modal — content styles only (FEN-580 / G1, migrated FEN-1330 S2).
+ *
+ * Structure, positioning, backdrop, safe-area padding, and animation are now
+ * delegated to the BottomSheet socle (bottomSheet.css). Only sign-in button
+ * chrome and pre-OAuth copy typography live here.
+ *
+ * z-index: handled by BottomSheet (--z-sheet / z-index:50 on modal presentation).
+ */
+
+/* Root flex column: gap between content sections (AC3 FEN-1672) */
+.lp-auth-modal {
+  gap: var(--sheet-gap-section);
+}
+
+/* Title */
+.lp-auth-modal .lp-modal__title {
+  font-size: var(--text-lg, 18px);
+  line-height: var(--text-lg-lh, 26px);
+  font-weight: 600;
+  color: var(--text-1, #fff);
+  margin: 0;
+}
+
+/* Value proposition line */
+.lp-auth-modal .lp-modal__value {
+  font-size: var(--text-base, 16px);
+  line-height: var(--text-base-lh, 24px);
+  color: var(--text-1, #fff);
+  margin: 0;
+}
+
+/* Reassurance line — secondary emphasis */
+.lp-auth-modal .lp-modal__reassurance {
+  font-size: var(--text-sm, 14px);
+  line-height: var(--text-sm-lh, 20px);
+  color: var(--text-muted, rgb(255 255 255 / 0.6));
+  margin: 0;
+}
+
+/* CTA — full-width on all viewports (spec §E5) */
+.lp-auth-modal .lp-modal__cta {
+  width: 100%;
+}

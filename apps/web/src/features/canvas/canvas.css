@@ -1,0 +1,1857 @@
+/*
+ * Canvas viewer screen — Arcade chrome (Lot A, [FEN-269]).
+ *
+ * This is the screen's layout/positioning layer only: every atom (Button,
+ * StatusPill, Gauge, ColorSelector, Toast) is the Foundation component (FEN-268),
+ * styled by `ui/styles/components.css`. Here we only place those atoms and paint
+ * the screen's own surfaces — and we do it TOKEN-ONLY (AC6): no hard-coded
+ * colour / space / radius / motion, everything reads `var(--…)` so the active
+ * `data-direction="fun"` drives 100% of the look.
+ *
+ * Direction: "le canvas reste roi, le chrome reste neutre" (handoff §1). The
+ * field around the board is the neutral `--canvas-field`; the HUD panels are
+ * quiet raised surfaces. Chromatic neutrality is the point — it is what makes
+ * the ColorSelector swatch read as the exact pixel that lands (fidelity).
+ */
+
+.lp-app,
+.lp-obs {
+  position: fixed;
+  inset: 0;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+}
+
+/* Visually-hidden but exposed to assistive tech: carries the canvas keyboard
+   instructions (text alternative) and the polite cursor announcements (FEN-123,
+   U3). Not a visual token — this is a11y plumbing the behaviour depends on. */
+.lp-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* FrescoCanvas (FEN-269): the neutral framed field. The renderer runs with a
+   transparent backing, so the empty letterbox around the board shows this
+   neutral field — the chromatic-neutrality surround a posed pixel reads against. */
+.lp-fresco {
+  position: fixed;
+  inset: 0;
+  background: var(--canvas-field);
+}
+
+/* Fixed viewport checkerboard (FEN-418 D1): sits BEHIND the transparent canvas
+   (z-index 0), never participates in pan/zoom — the setTransform only moves the
+   pixels painted on the canvas element, not this element. Two shades from the
+   canvas tokens reinforce "transparent board" without distracting from the art.
+   pointer-events:none so it cannot interfere with canvas interactions. */
+.lp-checker {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--canvas-field);
+  background-image: repeating-conic-gradient(
+    var(--canvas-checker) 0% 25%,
+    transparent 0% 50%
+  );
+  background-size: 12px 12px;
+}
+
+.lp-canvas {
+  display: block;
+  position: relative; /* FEN-446: must be above .lp-checker (position:fixed z-index:0) */
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  background: transparent; /* board pixels paint over the neutral field */
+  cursor: crosshair;
+  touch-action: none; /* we handle wheel/drag ourselves */
+}
+/* Operable focus indicator for the interactive grid (keyboard, FEN-123). */
+.lp-canvas:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+
+/* FEN-1887: eyedropper mode — distinct cursor + floating badge. */
+.lp-app[data-eyedropper-mode="on"] .lp-canvas {
+  cursor: cell;
+}
+.lp-eyedropper-hint {
+  position: absolute;
+  top: calc(var(--lp-topbar-h, 3.5rem) + var(--space-3, 0.75rem));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink, #1a1a2e);
+  color: var(--paper, #f5f5f0);
+  padding: var(--space-1, 0.25rem) var(--space-4, 1rem);
+  border-radius: var(--radius, 0.25rem);
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 20;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0 0 0 / 0.3);
+}
+
+/* OBS browser source (F9): transparent + strictly read-only (CA1/CA3). */
+html.lp-obs-root,
+html.lp-obs-root body {
+  background: transparent;
+  overflow: hidden;
+}
+.lp-obs {
+  background: transparent;
+  /* §9.3 — force 1:1 square centred in the OBS browser-source viewport.
+     Override the shared inset:0 with an explicit centre-anchor so the board
+     always renders as a square regardless of the source dimensions configured
+     in OBS (1920×1080, 1080×1080, etc.).  min(100vw,100vh) = the shorter axis. */
+  inset: unset;
+  width: min(100vw, 100vh);
+  height: min(100vw, 100vh);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+/* FEN-1467: OBS "canvas unavailable" — discreet centred message, 0 chrome.
+   Covers both cases: unknown slug and canvas not yet created by the streamer.
+   Text-shadow ensures legibility on both dark and light stream backgrounds. */
+.lp-obs.lp-obs--unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lp-obs-unavailable-msg {
+  margin: 0;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: var(--text-sm, 0.875rem);
+  color: rgba(255 255 255 / 0.75);
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0 0 0 / 0.6);
+  pointer-events: none;
+  user-select: none;
+}
+.lp-obs .lp-canvas {
+  background: transparent;
+  cursor: default;
+  pointer-events: none;
+  /* OBS contour (FEN-271, Lot C): the `--elev-obs` token is a hard 2px dark ring
+     + soft drop shadow, so the source reads against BOTH a light and a dark
+     stream (separation that survives the stream's re-compression). Rendered
+     inset so the ring stays inside the browser-source bounds (an outward ring
+     would be clipped at the source edge). Token is the single source of the
+     value — no hard-coded colour (AC6). The token resolves because ObsView
+     loads `ui/styles/tokens.css`; if it ever doesn't, the box-shadow is simply
+     dropped (no contour), never a broken style. */
+  box-shadow: inset var(--elev-obs);
+}
+
+/* ---- Top bar -------------------------------------------------------------- */
+/* The canvas topbar is its OWN distinct surface (FEN-282). On the canvas-hero the
+   bar floats over the live fresco, so any text inside it (identity, nav links,
+   viewer count, locale) must stay legible no matter what viewers paint behind it
+   — the legibility promise can't depend on the canvas content (Norman figure/
+   ground; WCAG 1.4.3). We back the WHOLE bar with an OPAQUE raised surface (not a
+   translucent scrim): the fresco never shows through, so AA contrast for every
+   child is guaranteed independently of the pixels behind it, and there is no
+   parasitic halo around the (brand-locked violet) signed-out CTA. This mirrors
+   the global nav's full-chrome promise (AppShell) on the hero. Surface token
+   arrested by UI Designer (FEN-286): --ui-surface (gray-25), NOT --ui-surface-raised
+   (gray-0). gray-25 keeps a tonal step over white fresco pixels (where --elev-2's
+   shadow vanishes) and avoids the brightest-possible chrome for dark-room Twitch
+   viewers; in the system --ui-surface is the HUD/panel role while -raised is for
+   transient modals/popovers. Opaque + border + --elev-2 + --radius-pill confirmed. */
+.lp-topbar {
+  position: fixed;
+  top: var(--space-3);
+  right: var(--space-3);
+  /* Never overflow horizontally (FEN-283). Anchored top-right, the bar is bounded
+     to the viewport width minus its insets; if the content can't fit one row it
+     wraps onto a tidy right-aligned second row instead of spilling past the edge.
+     The onboarding pill below reads the bar's real height (--lp-topbar-h, set by
+     CanvasView's ResizeObserver) so it is never occluded, whatever the row count. */
+  max-width: calc(100vw - 2 * var(--space-3));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  /* Tight inter-chip gap on the opaque surface (FEN-282): the bar is one panel of
+     flat chips, not separate pills, so they sit close. */
+  gap: var(--space-1);
+  align-items: center;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  box-shadow: var(--elev-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  z-index: var(--z-dock);
+}
+/* Brand wordmark in the bar (FEN-338) — present only on the mobile fine bar.
+   Desktop keeps the floating top-right bar with no brand (the global chrome owns
+   it), so it is hidden here and shown by the ≤768px override below (AC-9). */
+.lp-topbar-brand {
+  display: none;
+}
+/* Link wrapper around the LivePlace wordmark (FEN-1709). display:contents keeps
+   the wrapper invisible to layout so lp-topbar-brand / lp-tb-left flex rules are
+   unaffected. cursor:pointer on the child ensures the hand cursor over the wordmark. */
+.lp-topbar-home-link {
+  display: contents;
+  color: inherit;
+  text-decoration: none;
+}
+.lp-topbar-home-link > .ui-wordmark {
+  cursor: pointer;
+}
+/* Right-hand cluster wrapper (FEN-338). On desktop it is `display:contents`, so
+   the live counter + overflow menu flatten inline into the bar exactly as before
+   (AC-9: desktop untouched). The ≤768px override turns it into the flex group
+   pushed to the right of the wordmark. */
+.lp-topbar-actions {
+  display: contents;
+}
+/* canvas → gallery escape hatch: light, secondary to the hero (FEN-114).
+   ≥44px tap target on mobile (FEN-125 / WCAG 2.5.5). */
+.lp-navlink {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  color: var(--ui-text);
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
+  /* The label is one token, never a 3-line wrap on a narrow bar (FEN-283 #4). */
+  white-space: nowrap;
+}
+.lp-navlink:hover {
+  background: var(--ui-surface);
+}
+.lp-navlink:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+/* ---- Topbar overflow menu (FEN-326 / AC-6) -------------------------------
+   Desktop is unchanged (AC-16): the wrapper and the secondary group are
+   `display:contents`, so gallery / how-it-works / share / language flex inline
+   in the bar exactly as before, and the "More" trigger is removed. The compact
+   override (≤768px, below) is what collapses them behind the single trigger. */
+.lp-topbar-menu,
+.lp-topbar-secondary {
+  display: contents;
+}
+.lp-topbar-menu-trigger {
+  display: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+.lp-topbar-menu-icon {
+  /* SVG icon: inherit colour from parent button, render inline-block. The SVG
+     width/height are set on the element itself so font-size has no effect. */
+  display: block;
+  line-height: 0;
+}
+/* The trigger only renders on mobile (display:none on desktop), and the maquette's
+   fine bar shows the ≡ glyph ALONE — no "Menu" text. The accessible name is carried
+   by the button's aria-label, so hiding the visual label keeps a11y intact while
+   matching the maquette. (No-op on desktop, where the trigger is hidden — AC-9.) */
+.lp-topbar-menu-label {
+  display: none;
+}
+
+/* ---- Menu shell: sections + dividers + item grammar (FEN-866) ---------------
+   On desktop `.lp-topbar-secondary` is `display:contents`, so sections must also
+   dissolve into the flex flow. `display:contents` makes `.lp-menu-section` boxes
+   invisible while their children participate in the bar's layout (AC-D2). */
+.lp-menu-section {
+  display: contents;
+}
+/* Dividers are invisible on desktop inline — only meaningful in the popover. */
+.lp-menu-divider {
+  display: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+/* `.lp-menu-row`: uniform item grammar shared by all four section kinds. Desktop
+   rules come from `.lp-navlink` already on the element; the mobile override below
+   adds width + tap-floor. Gaps in the `?` glyph + label shortcut button are
+   handled here so the flex layout stays consistent on all viewport sizes. */
+.lp-menu-row {
+  gap: var(--space-2);
+}
+
+/* ---- "Partager" button + manual-copy fallback (FEN-304) ------------------ */
+/* The button itself is the Foundation <Button> (styled by components.css). The
+   data-state hook lets a copied flash read as success without a global toast
+   (D-c); token-only so the active direction owns the colour. */
+.lp-share {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.lp-share .ui-btn[data-state="copied"] {
+  border-color: var(--ok-border, var(--ui-border));
+  color: var(--ok-text, var(--ui-text));
+}
+/* The fallback only appears when the clipboard is unavailable (AC8): a small
+   raised popover under the bar with the link in a selectable field. */
+.lp-share-fallback {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: var(--ui-surface-raised);
+  border: 1px solid var(--ui-border);
+  box-shadow: var(--elev-3);
+  border-radius: var(--da-radius-card);
+  max-width: min(80vw, 320px);
+  z-index: calc(var(--z-dock) + 1);
+}
+.lp-share-error {
+  font-size: var(--text-sm);
+  color: var(--ui-text);
+}
+.lp-share-url {
+  font-size: var(--text-sm);
+  font-family: var(--font-mono, monospace);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  width: 100%;
+}
+
+/* ---- G7 Mini-gauge + Pose FAB (FEN-627) -- mobile-only, hidden on desktop ---- */
+/* Mini-gauge: compact charge-state pill in the topbar, always visible on mobile
+   (AC3). Tap → opens full gauge (AC6). Desktop hides it (dock has the full gauge). */
+.lp-topbar-minigauge {
+  display: none;
+}
+/* Pose FAB: "Poser ici" floating action, mobile thumb zone (AC1/AC4/AC7).
+   Explicit button tap, never a canvas gesture → no accidental pose (AC5).
+   Hidden on desktop (dock CTA handles it). Hidden when panel is open / drawing. */
+.lp-pose-fab {
+  display: none;
+}
+/* Ensure [hidden] overrides any media-query display re-enable. */
+.lp-pose-fab[hidden] {
+  display: none !important;
+}
+/* HeroGauge (G5 FEN-633): visible on desktop only via the @media(min-width:1024px)
+   block. Hidden by default so mobile uses the compact reserve bars instead. The
+   comment in CanvasView ("masqué via CSS") referred to this rule. */
+.lp-hero-gauge-wrap {
+  display: none;
+}
+
+/* ---- HUD (S3 FEN-1341: contenu du socle BottomSheet) ----------------------
+   Le chrome (position, background, border, padding, anim) est fourni par
+   bottomSheet.css. Ce bloc ne garde que la mise en page interne du dock. */
+.lp-hud {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-section);
+}
+.lp-hud h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--accent-text);
+  margin: 0;
+}
+
+/* Réserve / countdown stack (FEN-269/FEN-338/FEN-899) — ring to the left,
+   bar fills remaining width. Row layout so the ring and bar share one line.
+   When not on cooldown only the bar is present; flex:1 gives it the full width. */
+.lp-reserve {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sheet-gap-inline);
+}
+/* Ring (cooldown mode, no data-mode attr): pinned at its natural 36px. */
+.lp-reserve > .ui-gauge:not([data-mode]) {
+  flex-shrink: 0;
+}
+/* Bar (ready mode): grow to fill space the ring doesn't use. */
+.lp-reserve > .ui-gauge[data-mode="bar"] {
+  flex: 1 1 0;
+  width: auto;
+}
+
+
+/* Lot F (FEN-119/FEN-169) cooldown status line. A forward-framed STATUS, not an
+   alert: the ramp reads as escalating anticipation (waiting → armed → go), never
+   urgent red. Phase carried by TEXT + WEIGHT + a LEFT-BORDER accent as well as
+   hue, so it stays legible in greyscale / for colour-blind users (WCAG 1.4.1).
+   Colours are status tokens (amber = cooling, green = go). */
+.lp-cooldown {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  padding-left: var(--space-3);
+  border-left: 3px solid transparent;
+  transition: color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+.lp-cooldown[data-phase="waiting"] {
+  color: var(--status-cooldown-fg);
+  border-left-color: var(--status-cooldown-bg);
+  font-weight: var(--weight-semibold);
+}
+.lp-cooldown[data-phase="armed"] {
+  color: var(--status-cooldown-fg);
+  border-left-color: var(--status-cooldown-fg);
+  border-left-width: 4px;
+  font-weight: var(--weight-bold);
+}
+.lp-cooldown[data-phase="ready"],
+.lp-cooldown[data-phase="refilledArmed"] {
+  color: var(--status-open-fg);
+  border-left-color: var(--status-open-fg);
+  border-left-width: 4px;
+  font-weight: var(--weight-bold);
+}
+/* A sober pulse on the "go" phases — anticipation, not alarm. Opt-in only: the
+   reduced-motion token zeroes --da-motion-scale, and the colour/weight cues above
+   stand on their own without it. */
+@media (prefers-reduced-motion: no-preference) {
+  .lp-cooldown[data-phase="ready"],
+  .lp-cooldown[data-phase="refilledArmed"] {
+    animation: lp-cooldown-go calc(1.6s / (0.0001 + var(--da-motion-scale))) var(--ease-in-out) infinite;
+  }
+  @keyframes lp-cooldown-go {
+    0%,
+    100% {
+      border-left-color: var(--status-open-fg);
+    }
+    50% {
+      border-left-color: var(--status-green-100);
+    }
+  }
+}
+/* Claim de palier (Lot D / FEN-116 · Option A FEN-1311) — bouton coral seul,
+   sans encadré vert. Conteneur neutre : juste un gap vertical entre micro-label
+   et CTA. */
+.lp-claim {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+}
+/* Micro-label: icône éclair + texte état en accent-text, petite casse uppercase. */
+.lp-claim-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  color: var(--accent-text);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+/* CTA plein largeur (≥44px garanti par .ui-btn--md). */
+.lp-claim-btn {
+  width: 100%;
+}
+
+/* Pixel-info panel (FEN-249 / FEN-755): coordinates + swatch + author + date.
+   No card styling at base — on mobile the panel lives inside the bottom sheet
+   (which provides its own surface), so a nested background/border would create
+   a "card within a card". Desktop re-adds the raised surface via position:fixed
+   override below (≥1024px). */
+.lp-pixelinfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+}
+/* Header row: colour swatch + coordinates inline */
+.lp-pixelinfo-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sheet-gap-inline);
+}
+/* Colour swatch: 16×16 rounded square, no text (FEN-755 §4.2). */
+.lp-pixelinfo-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-xs, 3px);
+  border: 1px solid rgba(0 0 0 / 0.15);
+  flex-shrink: 0;
+}
+.lp-pixelinfo-coords {
+  margin: 0;
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-text);
+}
+/* Author row: avatar + login/anon text aligned */
+.lp-pixelinfo-author {
+  display: flex;
+  align-items: center;
+  gap: var(--sheet-gap-inline);
+  font-size: var(--text-sm);
+}
+/* Twitch avatar thumbnail */
+.lp-pixelinfo-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.lp-pixelinfo-author-text {
+  margin: 0;
+}
+.lp-pixelinfo-author-label {
+  color: var(--ui-text-secondary);
+  font-weight: var(--weight-semibold);
+}
+.lp-pixelinfo-author-value {
+  color: var(--ui-text);
+}
+/* Clickable login button (known author) — button reset + underline affordance. */
+button.lp-pixelinfo-author-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Empty cell / not-yet-wired attribution reads as muted, not an error state. */
+.lp-pixelinfo[data-author-state="empty"] .lp-pixelinfo-author-value,
+.lp-pixelinfo[data-author-state="unknown"] .lp-pixelinfo-author-value,
+.lp-pixelinfo[data-author-state="loading"] .lp-pixelinfo-author-value {
+  color: var(--ui-text-tertiary);
+  font-style: italic;
+}
+/* Placement date/time */
+.lp-pixelinfo-date {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--ui-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.lp-pixelinfo-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+}
+
+/* Pixel-click moderation (FEN-754 §8.2 / FEN-1653) — owner/mod-only block, visually
+   distinct from the author info via its own panel background (not just a divider). */
+/* FEN-1984: progressive disclosure — outer container keeps the top-border separator;
+   padding is handled per child so the toggle spans the full width. */
+.lp-pixelinfo-mod {
+  display: flex;
+  flex-direction: column;
+  background: var(--ui-bg);
+  border-top: var(--border-w) solid var(--ui-border);
+  border-radius: 0;
+}
+/* Toggle row: full-width button, neobrutalism chip style (hard border + bold label). */
+.lp-pixelinfo-mod-toggle {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: var(--border-w) solid transparent;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+.lp-pixelinfo-mod-toggle:hover {
+  background: var(--ui-surface-raised);
+}
+/* Show inner separator only when expanded so body is visually separated from the toggle. */
+.lp-pixelinfo-mod-toggle[aria-expanded="true"] {
+  border-bottom-color: var(--ui-border);
+}
+.lp-pixelinfo-mod-toggle-label {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ui-text-secondary);
+}
+.lp-pixelinfo-mod-toggle-chevron {
+  font-size: var(--text-xs);
+  color: var(--ui-text-secondary);
+  line-height: 1;
+}
+/* Expandable content body — same inner spacing as the old static section. */
+.lp-pixelinfo-mod-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+  padding: var(--space-3);
+}
+.lp-pixelinfo-mod-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+}
+.lp-pixelinfo-mod-confirm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+}
+/* Danger variant: red bg/border on the neobrutalism secondary chrome (border + hard shadow). */
+.lp-pixelinfo-mod-danger {
+  --_btn-bg: var(--status-error-bg);
+  --_btn-fg: var(--status-red-500);
+  --_btn-bg-hover: var(--status-red-100);
+  --_btn-bg-active: var(--status-red-100);
+  --_btn-border: var(--status-red-500);
+}
+.lp-pixelinfo-mod-prompt {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ui-text);
+}
+
+/* Pose surface (FEN-311) — palette + pose tools grouped so the mobile layout can
+   treat them as one foldable bottom-sheet. On desktop it is a plain column inside
+   the HUD panel, preserving the prior stacked spacing (AC-16). */
+.lp-pose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-group);
+}
+
+/* FEN-788: palette wrapper. Block-level (not flex) so the inner grid gets the
+   full parent width and `auto-fill` places swatches in a horizontal row. A flex
+   container would leave the grid child with flex:0 1 auto → max-content = 1 col
+   = vertical stack (AC-1 bug). Hidden outside draw mode via data-pose. */
+.lp-pose-palette {
+  display: block;
+}
+.lp-hud:not([data-pose="on"]) .lp-pose-palette {
+  display: none;
+}
+/* The big thumb-zone "Poser" CTA (FEN-338): full dock width so it sits where the
+   thumb reaches. It is the dock's persistent primary action (a direct child of
+   the .lp-pose column now), so it stretches the whole width and centres its label
+   like the maquette's CTA. */
+.lp-cta-poser {
+  align-self: stretch;
+  width: 100%;
+  justify-content: center;
+}
+/* P5 (FEN-1986): CTA primaire visible dès l'entrée en mode dessin, même à 0
+   sélection. On cache uniquement hors draw mode (data-pose="off") pour que la
+   vue browsing reste propre. En draw mode le bouton est rendu désactivé avec
+   libellé "Poser ici" / "Attends la recharge". */
+.lp-hud[data-staged="no"]:not([data-pose="on"]) .lp-cta-poser {
+  display: none;
+}
+
+/* Empty-state guidance hint: shown in draw mode only, below the palette. */
+.lp-draw-empty-hint {
+  font-size: var(--text-sm);
+  color: var(--ui-text-secondary);
+  text-align: center;
+  margin: 0;
+}
+
+/* The signed-out dock CTA (AC-3): a single Twitch connect button standing in for
+   the whole pose surface. Brand colour + look come from the Foundation Button /
+   `lp-auth__twitch`; here we only let it span the dock width on a narrow screen.
+   `width: 100%; min-width: 0` are belt-and-suspenders alongside `align-self:
+   stretch`: they prevent the button from overflowing the dock on narrow viewports
+   when `white-space: nowrap` is set (the button's min-content-width would otherwise
+   exceed the dock inner width). */
+.lp-cta {
+  align-self: stretch;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* AC-2 (FEN-746): CTA + cancel button on the same row. */
+.lp-cta-row {
+  display: flex;
+  gap: var(--sheet-gap-inline);
+  align-items: stretch;
+}
+.lp-cta-row .lp-cta-poser {
+  flex: 1;
+}
+
+/* Cancel icon button (AC-2 FEN-746): square on mobile (icon only), icon + label on desktop.
+   FEN-881 AC-4: gray surface so the icon never floats on a transparent background in either
+   state (0 pixels staged or n>0). Token-based theming — no hardcoded values. */
+.lp-cancel-btn {
+  --_btn-bg: var(--gray-100);
+  --_btn-fg: var(--ui-text-secondary);
+  --_btn-bg-hover: var(--gray-150);
+  --_btn-bg-active: var(--gray-200);
+  --_btn-border: transparent;
+  box-shadow: none;
+  flex-shrink: 0;
+  gap: var(--space-2);
+}
+.lp-cancel-btn__icon {
+  font-size: var(--text-base);
+  line-height: 1;
+}
+/* Desktop default: show the label text. */
+.lp-cancel-btn__label {
+  white-space: nowrap;
+}
+
+/* Ephemeral feedback host — fixes the Foundation Toast bottom-centre. The Toast
+   itself owns its kind colours + role (status / alert).
+   safe-bottom added so the toast clears the iOS home indicator on notch devices
+   (env(safe-area-inset-bottom) = 0 on desktop, so no visual change there). */
+.lp-toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--space-6) + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+  max-width: min(92vw, 420px);
+}
+
+
+/* ── ZoomControls — floating +/−/⊡ cluster (FEN-370 / FEN-388 / FEN-845) ────
+   Fixed at top-right on ALL viewports, just below the topbar, so the cluster
+   floats above the canvas GPU layer (z-fab = 25 > z-dock = 10 > canvas).
+   --lp-topbar-h is the measured bottom edge of the topbar bar (ResizeObserver
+   in CanvasView). Landscape moves it beside the right rail (same top). */
+.lp-zoom-controls {
+  position: fixed;
+  right: var(--space-3);
+  top: calc(var(--lp-topbar-h, 52px) + var(--space-3));
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--da-radius-control, var(--radius-md));
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+  box-shadow: var(--elev-2);
+  z-index: var(--z-fab);
+  overflow: hidden;
+}
+.lp-zoom-btn {
+  display: grid;
+  place-items: center;
+  width: var(--zoom-btn);
+  height: var(--zoom-btn);
+  min-height: var(--target-min);
+  background: transparent;
+  border: none;
+  color: var(--ui-text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  cursor: pointer;
+  line-height: 1;
+}
+.lp-zoom-btn:hover {
+  background: color-mix(in srgb, var(--ui-text) 8%, transparent);
+}
+.lp-zoom-btn:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+.lp-zoom-btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-text, var(--accent));
+}
+.lp-zoom-btn:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.lp-zoom-divider {
+  display: block;
+  height: 1px;
+  background: var(--ui-border);
+}
+
+/* ---- G4 — Sound toggle (FEN-639) --------------------------------------------
+   .lp-sound-btn   = icon-only chrome button (topbar cluster).
+   .lp-sound-row   = labelled row for a settings panel (variant="row").
+   AC6: aria-pressed (icon) / role=switch (row); 44px target; focus-ring.
+   AC5: disabled/.is-blocked = opacity-disabled + cursor:not-allowed.
+   Shape carries state, not colour alone (WCAG 1.4.1). --------------------  */
+.lp-sound-btn {
+  display: grid;
+  place-items: center;
+  width: var(--target-min);
+  height: var(--target-min);
+  min-width: var(--target-min);
+  background: transparent;
+  border: none;
+  border-radius: var(--da-radius-control, var(--radius-md));
+  color: var(--ui-text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+.lp-sound-btn:hover {
+  background: color-mix(in srgb, var(--ui-text) 8%, transparent);
+}
+.lp-sound-btn[aria-pressed="true"],
+.lp-sound-btn.is-on {
+  color: var(--accent-text, var(--accent));
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+.lp-sound-btn[aria-pressed="true"]:hover,
+.lp-sound-btn.is-on:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.lp-sound-btn:active {
+  transform: scale(0.96);
+}
+.lp-sound-btn:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.lp-sound-btn:disabled,
+.lp-sound-btn.is-blocked {
+  opacity: var(--opacity-disabled, 0.4);
+  cursor: not-allowed;
+}
+/* Decorative 1-frame pulse when a sound plays — disabled under reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .lp-sound-btn.is-pinging {
+    animation: lp-sound-ping var(--dur-fast, 120ms) var(--ease-spring, ease) both;
+  }
+}
+@keyframes lp-sound-ping {
+  0%   { transform: scale(1);    }
+  50%  { transform: scale(1.15); }
+  100% { transform: scale(1);    }
+}
+
+/* Row variant: labelled switch for a settings panel */
+.lp-sound-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  min-height: var(--target-min);
+  padding: 0 var(--space-2, 8px);
+  background: transparent;
+  border: none;
+  border-radius: var(--da-radius-control, var(--radius-md));
+  color: var(--ui-text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast, 120ms) var(--ease-out, ease);
+  width: 100%;
+  text-align: left;
+}
+.lp-sound-row:hover {
+  background: color-mix(in srgb, var(--ui-text) 8%, transparent);
+}
+.lp-sound-row.is-on {
+  color: var(--accent-text, var(--accent));
+}
+.lp-sound-row:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.lp-sound-row:disabled,
+.lp-sound-row.is-blocked {
+  opacity: var(--opacity-disabled, 0.4);
+  cursor: not-allowed;
+}
+.lp-sound-row-label {
+  font-size: var(--text-sm, 0.875rem);
+}
+
+/* ---- Mobile refonte — « Canvas d'abord » (FEN-311) ---------------------------
+   The single hard constraint (Alexis): the canvas is never masked or blocked by
+   chrome on mobile. The HUD stops being a tall bottom-left panel that buries the
+   board and becomes ONE compact bottom dock; the palette/pose surface folds away
+   when not posing so the canvas is full-screen at rest. Token-only: every value
+   is a `var(--…)` or a viewport unit — no colour/space/radius in hard pixels.
+   Breakpoint literal `768px` mirrors `--bp-compact` (custom-properties can't be
+   used in a @media condition). */
+@media (max-width: 768px) {
+  /* --bp-compact */
+
+  /* ── Topbar = fine bord-à-bord (FEN-354 / maquette AC-0 / AC-3) ──────────
+     Edge-to-edge bar: wordmark left, counter + ≡ right. Square corners (not
+     pill), red bottom liseré, no floating shadow — one clean strip anchored to
+     the top safe-area edge. Safe-area padding keeps content clear of notches.
+     The --lp-topbar-h ResizeObserver (CanvasView) tracks the real bottom edge
+     so the floating status pill and onboarding hint clear it correctly. */
+  .lp-topbar {
+    left: 0;
+    right: 0;
+    top: var(--safe-top);
+    border-radius: 0;
+    border: none;
+    border-bottom: 2px solid var(--accent);
+    box-shadow: none;
+    padding: var(--space-2) var(--space-3);
+    padding-left: calc(var(--space-3) + var(--safe-left));
+    padding-right: calc(var(--space-3) + var(--safe-right));
+    max-width: none;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: var(--space-2);
+    /* AC3 (FEN-894): raise topbar stacking context above --z-fab (25) so the
+       menu dropdown covers zoom controls (.lp-zoom-controls) and other HUD
+       elements. Without this override, topbar sits at --z-dock (10) and its
+       absolute-positioned child .lp-topbar-secondary (z-index 30 relative to
+       the topbar context) is still painted within the z=10 layer — below any
+       fixed element at z-fab=25. Raising the context to --z-sheet (30) makes
+       the entire topbar + dropdown beat the zoom controls (25). */
+    z-index: var(--z-sheet);
+  }
+  .lp-topbar-brand {
+    display: inline-flex;
+    flex: none;
+    min-width: 0;
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+  /* AC-5 (FEN-360): explicitly set PS2P on the inner text span, not just the
+     container. The container inherits correctly in most browsers, but on some
+     mobile Chrome builds the custom-property `var(--font-display)` resolves to
+     its inherited fallback (Inter) before the direction token is applied.
+     Targeting > span:not(.ui-wordmark__mark) with specificity 0,2,1 ensures the
+     display face is forced on the actual rendered glyph regardless of the
+     cascade resolution timing of --font-display. font-weight:400 is the only
+     weight Press Start 2P ships; omitting it would block the font-face match. */
+  .lp-topbar-brand > span:not(.ui-wordmark__mark) {
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+  /* The counter + ≡ cluster, pushed to the right of the wordmark. */
+  .lp-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+    flex: none;
+  }
+
+  /* ── Arcade canvas frame (FEN-354 / handoff #6) ──────────────────────────
+     Dark arcade surround + coral liseré inset on .lp-canvas (not .lp-fresco).
+     The canvas element sits on top of the fresco div in the GPU stacking context,
+     so inset box-shadow on .lp-fresco is hidden behind it — the same mechanism as
+     the OBS elev-obs ring (which correctly targets .lp-canvas). Targeting .lp-canvas
+     puts the 2px accent ring above the pixel content, as the maquette shows.
+     The dark (#0f0f10) fresco surround replaces canvas-field gray (dead gray) so
+     any overflow gap reads as a cinematic frame, not a blank page. */
+  .lp-fresco {
+    background: #0f0f10;
+  }
+
+  /* ── Status pill floats over the canvas (FEN-338 / maquette) ──────────────
+  /* AC-6: the secondary actions stop sitting inline as a permanent strip — they
+     collapse behind one "More" disclosure. The trigger shows; the secondary group
+     becomes a popover anchored to the bar's bottom-right, hidden until open. The
+     bar itself is then just [wordmark] + [counter + ≡] on a single row.
+     F3 (FEN-716 / FEN-288): ≡ hit area ≥ 44×44px. .lp-navlink sets min-height;
+     min-width closes the width gap (SVG 16px + padding ≈ 32px → 44px). */
+  .lp-topbar-menu-trigger {
+    display: inline-flex;
+    min-width: var(--target-min);
+    justify-content: center;
+  }
+  .lp-topbar-secondary {
+    display: none;
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+    min-width: 11rem;
+    /* AC1 (FEN-894): was min(82vw, 320px) ≈ 320px on 390px phone — nearly
+       full-width. Reduced to 240px cap so the menu anchors top-right and stays
+       compact, exposing canvas context on the left. */
+    max-width: min(68vw, 240px);
+    background: var(--ui-surface-raised);
+    border: 1px solid var(--ui-border);
+    box-shadow: var(--elev-3);
+    border-radius: var(--da-radius-card);
+    /* AC1: tighter vertical padding to reduce overall menu height. */
+    padding: var(--space-1) var(--space-2);
+    z-index: var(--z-sheet);
+  }
+  .lp-topbar-secondary[data-open="true"] {
+    display: flex;
+  }
+  /* Inside the menu every item is a full-width row with the ≥44px tap floor. */
+  .lp-topbar-secondary > * {
+    width: 100%;
+    min-height: var(--target-min);
+  }
+  /* Section containers become flex columns in the popover (FEN-866 AC-A1/AC-A2). */
+  .lp-menu-section {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  /* Dividers: 1-px rule between sections; token colour only (AC-A3 / AC-C1).
+     min-height:0 resets the catch-all `.lp-topbar-secondary > *` tap floor (44px)
+     — dividers are decorative, not interactive tap targets (FEN-927). */
+  .lp-menu-divider {
+    display: block;
+    height: 1px;
+    min-height: 0;
+    background: var(--ui-border);
+    margin: var(--space-1) 0;
+  }
+  /* Item tap floor inside sections — all rows ≥44px (WCAG 2.5.5 / FEN-866 AC-A4). */
+  .lp-menu-section > * {
+    width: 100%;
+    min-height: var(--target-min);
+  }
+  /* `.lp-menu-row` class on items that already carry it: redundant floor is harmless,
+     but the class also unlocks any per-variant overrides without specificity fighting. */
+  .lp-menu-row {
+    width: 100%;
+    min-height: var(--target-min);
+  }
+  /* ShareButton wrapper harmonised to the row grammar (FEN-866 R-3):
+     `data-state="copied"` stays on `.ui-btn` inside — not removed here. */
+  .lp-menu-section .lp-share {
+    display: flex;
+    flex-direction: column;
+  }
+  /* AC2 (FEN-894): ShareButton uses variant="secondary" (visible border + raised
+     bg) which looks like an inutile rectangle inside the nav menu. Strip the box
+     treatment so it renders as a plain nav row like Gallery / Howto, keeping only
+     the text and the hover highlight. The active/focus ring is preserved via
+     .ui-btn:focus-visible (not overridden here). */
+  .lp-menu-section .lp-share .ui-btn {
+    width: 100%;
+    min-height: var(--target-min);
+    justify-content: flex-start;
+    --_btn-bg: transparent;
+    --_btn-bg-hover: var(--ui-surface);
+    --_btn-border: transparent;
+    box-shadow: none;
+  }
+  /* FEN-1660: nav bottom sheet — content flex column with gap between sections.
+     .lp-sheet is already display:flex flex-direction:column; gap adds breathing
+     room between the menu sections/dividers, parity with the old lp-topbar-secondary
+     gap:var(--space-1). Inner click-wrapper fills the sheet width. */
+  .lp-sheet.lp-nav-sheet {
+    gap: var(--sheet-gap-section);
+  }
+  .lp-nav-sheet .lp-tb-studio { width: 100%; }
+  .lp-sheet.lp-nav-sheet > div {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sheet-gap-section);
+    width: 100%;
+  }
+
+  /* S3 (FEN-1341): chrome (position/padding/anim) fourni par bottomSheet.css.
+     Closed state : override .lp-sheet[data-open="false"]{translateY(100%)}
+     pour ne laisser dépasser que la poignée (peek du handle). Spécificité
+     .lp-sheet.lp-hud > .lp-sheet[data-open] pour gagner la cascade. */
+  .lp-sheet.lp-hud[data-open="false"] {
+    transform: translateY(calc(100% - var(--target-min)));
+    pointer-events: none;
+  }
+  /* Keep the handle interactive when the panel is closed, so tapping it
+     reopens the sheet (the rest of the dock is pointer-events:none). */
+  .lp-sheet.lp-hud[data-open="false"] .lp-panel-handle {
+    pointer-events: auto;
+  }
+
+  /* ── G7 Mini-gauge in topbar (FEN-627) ──────────────────────────────────────
+     Compact charge-state pill inline in the topbar-actions flex group. Visible
+     on mobile only (base style: display:none). Tap → opens the full gauge
+     (panel) for AC6. Safe-area is handled by the topbar's own padding (AC7).
+     Font: var(--text-xs) to stay compact alongside the viewer counter. */
+  .lp-topbar-minigauge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--space-2);
+    min-height: var(--target-min);
+    background: var(--ui-surface-raised);
+    color: var(--ui-text);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--radius-pill);
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 120ms ease;
+  }
+  .lp-topbar-minigauge:hover {
+    opacity: 0.85;
+  }
+  .lp-topbar-minigauge:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* ── G7 "Poser ici" Pose FAB (FEN-627) ──────────────────────────────────────
+     Primary placement CTA in the thumb zone (bottom-center). Arms the centered-
+     reticle pixel in 1 tap and opens the color selector (AC1). Fixed at
+     bottom-center; left: 50% + translateX(-50%) keeps it centered at any width.
+     Disabled (+ "Patiente…" label) when arming is blocked by gauge state (AC4).
+     Positioned bottom: space-4 + safe-bottom to respect safe areas (AC7).
+     Hidden when panel is open, drawing, or batch staged (JS hidden attr, AC1). */
+  .lp-pose-fab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    bottom: calc(var(--space-4) + var(--safe-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0 var(--space-6);
+    min-height: var(--target-min);
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    color: var(--accent-onAccent, var(--gray-0));
+    border: none;
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+    z-index: var(--z-fab);
+    box-shadow: var(--elev-3);
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+    white-space: nowrap;
+  }
+  .lp-pose-fab:hover {
+    transform: translateX(-50%) scale(1.04);
+  }
+  .lp-pose-fab:active {
+    transform: translateX(-50%) scale(0.96);
+  }
+  .lp-pose-fab:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .lp-pose-fab:disabled {
+    opacity: 0.45;
+    cursor: default;
+    transform: translateX(-50%);
+    box-shadow: none;
+  }
+
+  /* Identity already lives in the topbar wordmark; the dock spends no vertical
+     space on the (hidden) <h1>. */
+  .lp-hud h1 {
+    display: none;
+  }
+  /* The dock is a PERSISTENT bottom sheet (FEN-338 / maquette + design §4):
+     reserve + palette + Poser are always present for a connected
+     viewer, not folded away. Height is auto (fit-content) up to 80svh (FEN-734). */
+
+  /* FEN-797: flux pose restauré (visite → tap=infos → Dessiner → palette).
+     FEN-788 overrides cleared: StatusPill (lp-state) and palette (lp-pose-palette)
+     visibility follow draw mode (data-pose) exactly as on desktop.
+     CTA row hides when not in draw mode so visit mode is clean. */
+  .lp-hud:not([data-pose="on"]) .lp-cta-row {
+    display: none;
+  }
+
+  /* AC-2 (FEN-746): cancel button is square (icon only) on mobile when pixels are staged. */
+  .lp-cancel-btn {
+    aspect-ratio: 1;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+  }
+  .lp-cancel-btn__label {
+    display: none;
+  }
+
+  /* FEN-881 AC-1: swatches slightly larger in the bottom-sheet palette.
+     The compact grid minmax is raised from 28px to 36px so each swatch
+     matches the standard non-compact size; layout still auto-fills horizontally. */
+  .lp-pose-palette .ui-swatches[data-compact="true"] {
+    grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  }
+  .lp-pose-palette .ui-swatches[data-compact="true"] .ui-swatch {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  /* Eraser keeps its auto width even after the swatch size bump. */
+  .lp-pose-palette .ui-swatches[data-compact="true"] .ui-swatch[data-eraser="true"] {
+    width: auto;
+    height: auto;
+    min-height: 36px;
+  }
+
+  /* P5 (FEN-1986): en draw mode (data-pose="on") le CTA primaire est désormais
+     visible à 0 sélection, le bouton Annuler reste compact (carré icon-only).
+     Ces règles full-width ne s'appliquent plus qu'hors draw mode, cas où le CTA
+     row est de toute façon masqué (display:none ci-dessus) — garder pour mémoire. */
+  .lp-hud[data-staged="no"]:not([data-pose="on"]) .lp-cancel-btn {
+    aspect-ratio: unset;
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+  }
+  .lp-hud[data-staged="no"]:not([data-pose="on"]) .lp-cancel-btn__label {
+    display: inline;
+  }
+
+  /* FEN-1656: in pixel-info mode the sheet itself was the "outer box" (border +
+     elev-3 shadow). Strip its chrome so only .lp-pixelinfo-mod keeps a visible box. */
+  .lp-sheet.lp-hud[data-mode="pixel-info"] {
+    border: none;
+    box-shadow: none;
+  }
+}
+
+/* ---- Mobile refonte — paysage court (FEN-311) --------------------------------
+   On a short landscape viewport a bottom dock would eat the whole height. The
+   dock becomes a bounded LEFT rail with internal scroll; the canvas keeps ≥50 %
+   width (AC-8) and nothing is cropped (AC-7). The rail starts BELOW the topbar's
+   measured bottom (--lp-topbar-h, published by CanvasView's ResizeObserver) so a
+   wide right-anchored topbar and the left rail never share the top band — a
+   short-but-wide landscape (844×390) otherwise overlapped them (AC-8, FEN-326).
+   Falls back to the one-row offset (--space-16) before the first measure. */
+@media (max-height: 480px) and (orientation: landscape) {
+  /* Arcade canvas frame in landscape (FEN-354) — same treatment as portrait:
+     dark surround + coral liseré on .lp-canvas (not .lp-fresco, where it is
+     hidden behind the canvas GPU layer). Wide short viewport > 768px so the
+     portrait rule does not reach it; repeat here. */
+  .lp-fresco {
+    background: #0f0f10;
+  }
+  /* Edge-to-edge bar in landscape (FEN-354 / AC-0/AC-3 parity with portrait).
+     The short-but-wide landscape is > 768px so the portrait rule misses it;
+     mirror the same bord-à-bord treatment: square corners, red liseré, no pill. */
+  .lp-topbar {
+    left: 0;
+    right: 0;
+    top: var(--safe-top);
+    border-radius: 0;
+    border: none;
+    border-bottom: 2px solid var(--accent);
+    box-shadow: none;
+    padding: var(--space-2) var(--space-3);
+    padding-left: calc(var(--space-3) + var(--safe-left));
+    padding-right: calc(var(--space-3) + var(--safe-right));
+    max-width: none;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: var(--space-2);
+    /* AC3 (FEN-894): parity with portrait — raise stacking context above --z-fab
+       so the menu dropdown covers zoom controls in landscape too. */
+    z-index: var(--z-sheet);
+  }
+  .lp-topbar-brand {
+    display: inline-flex;
+    flex: none;
+    min-width: 0;
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+  /* AC-5 parity with portrait fix (FEN-360): target text span directly. */
+  .lp-topbar-brand > span:not(.ui-wordmark__mark) {
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+  .lp-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+    flex: none;
+  }
+  /* F3 parity with portrait (FEN-716): ≥44×44px hit area on ≡ in landscape too. */
+  .lp-topbar-menu-trigger {
+    display: inline-flex;
+    min-width: var(--target-min);
+    justify-content: center;
+  }
+  .lp-topbar-secondary {
+    display: none;
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+    min-width: 11rem;
+    /* AC1 (FEN-894): parity with portrait compact fix. */
+    max-width: min(68vw, 240px);
+    background: var(--ui-surface-raised);
+    border: 1px solid var(--ui-border);
+    box-shadow: var(--elev-3);
+    border-radius: var(--da-radius-card);
+    padding: var(--space-1) var(--space-2);
+    z-index: var(--z-sheet);
+  }
+  .lp-topbar-secondary[data-open="true"] {
+    display: flex;
+  }
+  .lp-topbar-secondary > * {
+    width: 100%;
+    min-height: var(--target-min);
+  }
+  /* Section/divider/row grammar in landscape popover (FEN-866 — parity portrait). */
+  .lp-menu-section {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  /* min-height:0 resets the catch-all tap-floor, parity with portrait fix (FEN-927). */
+  .lp-menu-divider {
+    display: block;
+    height: 1px;
+    min-height: 0;
+    background: var(--ui-border);
+    margin: var(--space-1) 0;
+  }
+  .lp-menu-section > * {
+    width: 100%;
+    min-height: var(--target-min);
+  }
+  .lp-menu-row {
+    width: 100%;
+    min-height: var(--target-min);
+  }
+  .lp-menu-section .lp-share {
+    display: flex;
+    flex-direction: column;
+  }
+  /* AC2 (FEN-894): parity with portrait — ghost ShareButton in landscape menu. */
+  .lp-menu-section .lp-share .ui-btn {
+    width: 100%;
+    min-height: var(--target-min);
+    justify-content: flex-start;
+    --_btn-bg: transparent;
+    --_btn-bg-hover: var(--ui-surface);
+    --_btn-border: transparent;
+    box-shadow: none;
+  }
+  /* Controls live in a RIGHT rail (FEN-338 / maquette "rail de contrôles à
+     droite"): the canvas keeps the left ≥50 % width, nothing is cropped (AC-8). */
+  .lp-hud {
+    right: var(--space-2);
+    left: auto;
+    top: calc(var(--lp-topbar-h, var(--space-16)) + var(--space-2) + var(--safe-top));
+    bottom: var(--space-2);
+    max-width: min(46vw, 360px);
+    max-height: none;
+    overflow-y: auto;
+    overflow-x: hidden; /* clip any horizontal overflow inside the rail */
+    border-radius: var(--da-radius-card);
+    padding: var(--space-3);
+    padding-right: calc(var(--space-3) + var(--safe-left));
+  }
+  .lp-hud h1 {
+    display: none;
+  }
+  /* The persistent maquette CTA also shows at every state in landscape (the right
+     rail ends in "Poser ici" / "Attends la recharge"), overriding the desktop
+     at-rest hide. The tools row stays hidden at rest as in portrait. */
+  .lp-hud[data-staged="no"] .lp-cta-poser {
+    display: inline-flex;
+  }
+  /* ── P0-2 / P0-3 (FEN-380): landscape rail — closed state + zoom ──────────
+     S3 (FEN-1341): PanelHandle CSS fourni par bottomSheet.css (.lp-sheet .lp-panel-handle).
+     AC3 (FEN-1780): closed rail peeks by --target-min (handle visible at the
+     right edge) instead of sliding fully off-screen. */
+  .lp-sheet.lp-hud[data-open="false"] {
+    transform: translateX(calc(100% - var(--target-min)));
+    pointer-events: none;
+  }
+  .lp-sheet.lp-hud[data-open="false"] .lp-panel-handle {
+    pointer-events: auto;
+  }
+  /* FEN-1656: same single-box goal in landscape — strip outer rail chrome in pixel-info mode. */
+  .lp-sheet.lp-hud[data-mode="pixel-info"] {
+    border: none;
+    box-shadow: none;
+  }
+
+  /* Zoom controls in landscape: top-right of the canvas area (left of the right
+     rail). Base styles (position:fixed, visuals, button sizing) at global scope. */
+  .lp-zoom-controls {
+    right: calc(min(46vw, 360px) + var(--space-2) + var(--space-3));
+    top: calc(var(--lp-topbar-h, var(--space-16)) + var(--space-2) + var(--safe-top));
+  }
+}
+
+/* ── AC3 (FEN-1780): HUD peek on non-mobile viewports ≥640px ───────────────
+   bottomSheet.css @media(≥640px) would fully hide the sheet (translateY(100%)
+   + opacity:0) when data-open="false". Override for .lp-hud so the handle
+   strip stays visible — mirrors the portrait peek at ~line 1046. The landscape
+   rule (translateX, above) takes precedence via later cascade for landscape
+   phones. */
+@media (min-width: 640px) {
+  .lp-sheet.lp-hud[data-open="false"] {
+    transform: translateX(-50%) translateY(calc(100% - var(--target-min)));
+    opacity: 1;
+    pointer-events: none;
+  }
+  .lp-sheet.lp-hud[data-open="false"] .lp-panel-handle {
+    pointer-events: auto;
+  }
+}
+
+/* ── G5 — HeroGauge dès la bottom sheet centrée ≥640px (FEN-1783) ──────────
+   La bottom sheet devient une carte centrée (max 520px) à partir de 640px.
+   La HeroGauge est en tête du contenu ; les barres compactes (lp-reserve)
+   sont masquées en faveur de la HeroGauge sur tous les viewports ≥640px. */
+@media (min-width: 640px) {
+  /* G5 (FEN-633): show heroic gauge; hide compact reserve bars. */
+  .lp-hero-gauge-wrap {
+    display: block;
+  }
+  .lp-reserve {
+    display: none;
+  }
+}
+
+/* ── Desktop parité layout (FEN-678 disposition cible) ─────────────────────
+   Topbar bord-à-bord sur ≥769px+tall (pas la pill flottante) + wordmark.
+   `and (min-height: 481px)` exclut les téléphones en paysage court (≤480px)
+   qui ont leur propre bloc liseré accent — évite un conflit de cascade.
+   FEN-1822 : pixel-info n'est plus extrait coin bas-gauche — reste dans la sheet. */
+
+@media (min-width: 769px) and (min-height: 481px) {
+  /* Topbar : bord-à-bord (parité ancien repo, acceptance §4) */
+  .lp-topbar {
+    top: var(--safe-top);
+    left: 0;
+    right: 0;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid var(--ui-border);
+    box-shadow: var(--elev-1);
+    padding: var(--space-2) var(--space-5);
+    max-width: none;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  /* Wordmark : visible sur desktop (FEN-338 masquait, FEN-678 réactive) */
+  .lp-topbar-brand {
+    display: inline-flex;
+    flex: none;
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+  .lp-topbar-brand > span:not(.ui-wordmark__mark) {
+    font-family: var(--font-display);
+    font-weight: 400;
+  }
+  /* §A — Topbar clusters (FEN-1040): wider inter-cluster gap so sections read
+     as distinct groups separated by dividers (gap intra < gap inter). */
+  .lp-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin-left: auto;
+    flex: none;
+  }
+  /* §A — Re-assemble sections as tight inline-flex clusters (FEN-1040 AC1–AC5).
+     Base style is display:contents which dissolves the box; override to
+     inline-flex so each section groups its children with intra-cluster spacing. */
+  .lp-menu-section {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+  }
+  /* §A — Vertical dividers between clusters (FEN-1040 AC4). Base style hides
+     them (display:none); show as a 1px rule centred on the topbar baseline. */
+  .lp-menu-divider {
+    display: block;
+    align-self: center;
+    width: 1px;
+    height: var(--space-6);
+    margin: 0;
+    border: none;
+    background: var(--ui-border);
+    flex: none;
+  }
+  /* Titre HUD redondant avec la topbar wordmark */
+  .lp-hud h1 {
+    display: none;
+  }
+  /* AC6 (FEN-1044) — Share button ≥40px on desktop.
+     ShareButton uses size="sm" (min-height:36px); bump to 40px in the topbar. */
+  .lp-topbar-actions .lp-share .ui-btn--sm {
+    min-height: 40px;
+  }
+  /* AC5 (FEN-1044) — Collapse language segmented control to 44px total height.
+     Base: options min-height:44px + padding:2×4px + border:2×1px = 54px.
+     Desktop fix: remove container padding and match option height to inner area. */
+  .lp-langseg {
+    height: var(--target-min);
+    padding: 0;
+  }
+  .lp-langseg-opt {
+    min-height: calc(var(--target-min) - 2px); /* 44px border-box − 2px border = 42px */
+  }
+}
+
+@media (min-width: 1024px) {
+  /* FEN-1822: lp-pixelinfo ne sort PAS de la sheet — l'extraction position:fixed
+     bottom-left (ex-FEN-1082) est supprimée. La sheet centrée ≥640px fournit
+     le contexte de surface ; pas de background séparé nécessaire.
+     Empilé verticalement : HeroGauge → pixel-info → actions, en colonne. */
+}
+
+
+/* ── Keyboard shortcuts — trigger button + sheet (FEN-1884) ─────────────── */
+.lp-sc-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1;
+  background: none;
+  border: var(--border-w) solid var(--ink);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--ink);
+}
+.lp-sc-trigger:hover {
+  background: var(--ui-surface-raised, color-mix(in srgb, var(--ink) 8%, transparent));
+}
+
+
+.lp-sc-sheet-title {
+  font-size: var(--text-base);
+  font-weight: 700;
+  margin-top: 0;
+  margin-bottom: var(--space-4);
+}
+
+.lp-sc-sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.lp-sc-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lp-sc-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px var(--space-1);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  font-style: normal;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--ui-surface);
+  box-shadow: var(--elev-1);
+}
+
+.lp-sc-role {
+  font-size: var(--text-xs);
+  color: var(--ui-text-secondary);
+}
+
+/* ── FEN-683: cross-element overlap fixes (no layout restructure) ───────────
+   Fix A — offline banner covers topbar: the global component uses top:0 which
+   lands on top of the fixed topbar (z-dock:10 < banner z-toast:40). Override
+   inside .lp-app so the banner drops below the topbar's real measured edge. */
+.lp-app .ui-offline-banner-wrap {
+  top: var(--lp-topbar-h, 48px);
+}
+
+/* ── Desktop R2 (FEN-1052) — base: hide desktop-only elements on mobile ────
+   These zones are always in the DOM (they render in CanvasView JSX) but are
+   visually absent at <1024px to guarantee pixel-identical mobile rendering.
+   The @media(min-width:1024px) block below re-enables them. */
+.lp-tb-left,
+.lp-tb-center,
+.lp-tb-right {
+  display: none;
+}
+
+/* ── Desktop R2 layout (FEN-1052) ≥1024px ──────────────────────────────────
+   Three-zone topbar + stage flex split. The constraint (Alexis, non-
+   négociable): every rule here lives in this one media block. Nothing below
+   1024px is touched; the mobile and tablet layouts above are unaffected.
+
+   Architecture:
+   .lp-app  { flex-direction:row; padding-top:--topbar-h }
+     .lp-fresco (stage)  { flex:1; grid; centered canvas }
+   .lp-topbar { grid 1fr auto 1fr; 3 zones }                                */
+@media (min-width: 1024px) {
+  /* ---- Layout tokens ---- */
+  :root {
+    --topbar-h: 60px;
+    --rail-w: 288px;
+  }
+
+  /* ---- App shell: full-viewport flex row below the fixed topbar ---- */
+  .lp-app {
+    display: flex;
+    flex-direction: row;
+    padding-top: var(--topbar-h);
+    overflow: hidden;
+  }
+
+  /* ---- Stage: the canvas area, grows to fill remaining width ---- */
+  /* Use .lp-app > .lp-fresco (spec 0,2,0) to beat any conflicting
+     specificity from intermediate breakpoints that also target .lp-fresco.
+     Longhand top/right/bottom/left instead of `inset:unset` for broader
+     compatibility with CSS parsers that may not resolve the shorthand
+     against existing longhand declarations in the cascade. */
+  .lp-app > .lp-fresco {
+    position: relative;   /* leave the fixed stacking context */
+    top: auto;            /* explicitly cancel the mobile fixed top:0 */
+    right: auto;
+    bottom: auto;
+    left: auto;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    padding: 0 var(--space-5);
+    background: var(--ui-bg);
+    overflow: hidden;
+  }
+  /* Keep the lower-specificity alias for any other component that may
+     target .lp-fresco directly without the .lp-app ancestor. */
+  .lp-fresco {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* Checker is stage-local on desktop (canvas is not full-viewport) */
+  .lp-checker {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
+
+  /* Canvas: fills full stage width+height — board stays centred via renderer fitScale() contain */
+  .lp-canvas {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+
+  /* ---- Topbar: 3-zone grid ---- */
+  /* Override the 769px+ values for the full desktop grid. */
+  .lp-topbar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: auto;
+    left: 0;
+    height: var(--topbar-h);
+    max-width: none;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    grid-template-areas: "left center right";
+    align-items: center;
+    padding: 0 var(--space-6);
+    gap: 0;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid var(--ui-border);
+    box-shadow: var(--elev-1);
+    background: var(--ui-surface);
+    z-index: var(--z-dock);
+    /* disable flex shortcuts from the 769px rule */
+    flex-wrap: unset;
+    justify-content: unset;
+  }
+
+  /* Hide the mobile structure inside the topbar (burger is inside lp-topbar-actions) */
+  .lp-topbar .lp-topbar-brand,
+  .lp-topbar .lp-topbar-actions {
+    display: none;
+  }
+
+  /* Show and position the desktop zones */
+  .lp-tb-left {
+    display: flex;
+    grid-area: left;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .lp-tb-center {
+    display: flex;
+    grid-area: center;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .lp-tb-right {
+    display: flex;
+    grid-area: right;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    flex: none;
+  }
+
+  /* ---- Zone gauche — title, status dot ---- */
+  .lp-tb-div {
+    display: inline-block;
+    width: 1px;
+    height: 24px;
+    background: var(--ui-border);
+    flex-shrink: 0;
+  }
+  .lp-tb-title {
+    font-weight: var(--weight-semibold);
+    font-size: var(--text-sm);
+    color: var(--ui-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .lp-tb-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    padding: calc(var(--space-1) - 1px) var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--status-open-bg);
+    color: var(--status-open-fg);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  /* ---- Zone centre — nav links ---- */
+  .lp-tb-nav-link {
+    height: 40px;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .lp-tb-nav-link[aria-expanded="true"] {
+    background: var(--accent-soft);
+    color: var(--accent-text, var(--accent));
+  }
+
+  /* ---- Zone droite — icon buttons 40px ---- */
+  .lp-tb-right .lp-tb-studio { min-height: 40px; }
+  .lp-tb-right .lp-sound-btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+  }
+  .lp-tb-right .lp-share .ui-btn {
+    min-height: 40px;
+  }
+  /* Collapse language segment to 40px total height (parity with FEN-1044) */
+  .lp-tb-right .lp-langseg {
+    height: 40px;
+    padding: 0;
+  }
+  .lp-tb-right .lp-langseg-opt {
+    min-height: calc(40px - 2px);
+  }
+
+  /* ---- HUD content visibility: hide pose section at rest (no draw mode) ---- */
+  .lp-hud:not([data-pose="on"]) .lp-pose {
+    display: none;
+  }
+
+  /* ---- Zoom controls: horizontal row at bottom-left on larger screens ---- */
+  .lp-zoom-controls {
+    position: fixed;
+    left: var(--space-5);
+    bottom: var(--space-5);
+    right: auto;
+    top: auto;
+    flex-direction: row;
+    border-radius: 0;
+    box-shadow: var(--elev-2);
+  }
+  .lp-zoom-divider {
+    display: block;
+    width: 1px;
+    height: auto;
+    align-self: stretch;
+  }
+  .lp-zoom-btn {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  /* ---- Toast: centred horizontally in the viewport ---- */
+  .lp-toast-host {
+    left: 50%;
+    bottom: var(--space-6);
+  }
+
+  /* ---- Offline banner: start below topbar ---- */
+  .lp-app .ui-offline-banner-wrap {
+    top: var(--lp-topbar-h, 60px);
+  }
+}
+
+/* ---- Rail width at 1280–1599px ---- */
+@media (min-width: 1280px) {
+  :root { --rail-w: 320px; }
+}
+
+/* ---- Rail width at ≥1600px ---- */
+@media (min-width: 1600px) {
+  :root { --rail-w: 360px; }
+}
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .lp-topbar { padding: 0 var(--space-4); }
+}
+
+/* ---- Below 1120px: compact "Twitch" auth button label ---- */
+@media (min-width: 1024px) and (max-width: 1119px) {
+  .lp-tb-right { gap: var(--space-1); }
+  .lp-tb-center { gap: 0; }
+}

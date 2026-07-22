@@ -1,0 +1,240 @@
+/*
+ * BottomSheet — socle CSS commun (FEN-1330/FEN-1336 S0).
+ *
+ * Toute la CSS de sheet : anatomie + variantes desktop.
+ * Importé uniquement par BottomSheet.tsx ; jamais directement par une feature.
+ *
+ * Tokens de sheet (ratifiés par UI Designer, Stream D) :
+ *   --sheet-dur      durée de l'animation slide-in/out    (défaut = --dur-base 220ms)
+ *   --sheet-ease     easing de l'animation               (défaut = --ease-out)
+ *   --radius-sheet   coins haut de la sheet mobile        (défaut = --da-radius-card)
+ *
+ * ⚠ WARNING (FEN-326) : pas d'apostrophes, guillemets ni commentaires imbriqués
+ * dans le bloc :root — le parseur Tailwind v4 traque l'état des commentaires.
+ */
+
+:root {
+  --sheet-dur: var(--dur-base);
+  --sheet-ease: var(--ease-out);
+  --radius-sheet: var(--da-radius-card);
+  --sheet-pad: var(--space-4);
+  --sheet-gap-section: var(--space-4);
+  --sheet-gap-group: var(--space-2);
+  --sheet-gap-inline: var(--space-2);
+  --sheet-gap-title: var(--space-1);
+}
+
+/* ── Backdrop (modal uniquement) ─────────────────────────────────────────── */
+.lp-sheet__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.45);
+  z-index: 49;
+}
+
+/* ── Conteneur de sheet ───────────────────────────────────────────────────── */
+.lp-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: none;
+  /* Padding interne : safe-area en bas via --safe-bottom (AC4, pas d'env() brut). */
+  padding: var(--sheet-pad) var(--sheet-pad) calc(var(--sheet-pad) + var(--safe-bottom));
+  /* top padding supprimé quand la poignée est montée (elle fournit sa propre hauteur). */
+  background: var(--ui-surface-raised);
+  border-top: 1px solid var(--ui-border);
+  border-top-left-radius: var(--radius-sheet);
+  border-top-right-radius: var(--radius-sheet);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: var(--elev-3);
+  /* Hauteur plafonnée, scroll interne (AC6). svh = stable sous barre d'adresse. */
+  max-height: 80vh;
+  max-height: 80svh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-sheet);
+  /* --lp-sheet-drag-dy : offset Y du drag (posé en inline style par BottomSheet.tsx).
+     Composer avec le translate de centrage pour éviter d'écraser le translateX(-50%)
+     sur desktop — FEN-1783. Valeur 0px par défaut (aucun drag). */
+  transform: translateY(var(--lp-sheet-drag-dy, 0px));
+  /* Animation d'ouverture/fermeture unique (AC5). */
+  transition: transform var(--sheet-dur) var(--sheet-ease);
+}
+
+/* Quand la poignée est montée, supprimer le padding-top (elle fournit son espacement). */
+.lp-sheet[data-has-handle="true"] {
+  padding-top: 0;
+}
+
+/* Mode modal : z-index au-dessus des toasts (AC8). */
+.lp-sheet[data-presentation="modal"] {
+  z-index: 50;
+}
+
+/* Fermée (modeless) : translate hors de la vue. */
+.lp-sheet[data-open="false"] {
+  transform: translateY(100%);
+}
+
+/* ── Poignée (grip de R, tokens = R) ─────────────────────────────────────── */
+/* AC2 : markup/tokens identiques à R pour homogénéité visuelle. */
+.lp-sheet .lp-panel-handle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: calc(var(--target-min) + var(--space-3));
+  padding: var(--space-4) 0 var(--space-2);
+  background: transparent;
+  border: none;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  /* Supprime l'outline dans tous les états interactifs. L'élargissement du grip
+     est l'affordance a11y visuelle pour les utilisateurs clavier (FEN-1153). */
+  outline: none;
+}
+
+.lp-sheet .lp-panel-handle:focus,
+.lp-sheet .lp-panel-handle:focus-visible,
+.lp-sheet .lp-panel-handle:active {
+  outline: none;
+}
+
+.lp-sheet .lp-panel-handle-grip {
+  display: block;
+  width: var(--space-10);
+  height: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ui-text) 22%, transparent);
+  transition: width 150ms ease;
+}
+
+.lp-sheet .lp-panel-handle:hover .lp-panel-handle-grip,
+.lp-sheet .lp-panel-handle:focus-visible .lp-panel-handle-grip {
+  width: var(--space-12);
+}
+
+/* Croix desktop : masquée sur mobile par défaut. */
+.lp-sheet .lp-panel-handle-close {
+  display: none;
+}
+
+/* ── Header optionnel avec slot gauche (FEN-1872) ────────────────────────── */
+/* Mobile : colonne — grip en premier (order:0), headerLeft en dessous (order:1). */
+.lp-sheet__header {
+  display: flex;
+  flex-direction: column;
+}
+
+.lp-sheet__header .lp-panel-handle {
+  order: 0;
+}
+
+.lp-sheet__header-left {
+  order: 1;
+  padding: 0 var(--sheet-pad) var(--space-2);
+}
+
+@media (min-width: 640px) {
+  /* Desktop : ligne — headerLeft à gauche (order:0), poignée × à droite (order:1). */
+  .lp-sheet__header {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .lp-sheet__header .lp-panel-handle {
+    order: 1;
+    flex-shrink: 0;
+    width: auto;
+  }
+
+  .lp-sheet__header-left {
+    order: 0;
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-2) 0 0 var(--space-2);
+    align-self: flex-start;
+  }
+}
+
+/* ── Reduced-motion (AC5) ────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .lp-sheet {
+    transition: none;
+  }
+  .lp-sheet .lp-panel-handle-grip {
+    transition: none;
+  }
+}
+
+/* ── Rendu desktop unifié >= 640px (FEN-1785) ───────────────────────────── */
+/*
+ * Ancrée en bas, centrée horizontalement, ~480–560px (FEN-1783).
+ * Le drag Y est composé avec le translateX(-50%) via --lp-sheet-drag-dy
+ * pour que le centrage horizontal soit préservé pendant le drag.
+ */
+@media (min-width: 640px) {
+  .lp-sheet {
+    left: 50%;
+    right: auto;
+    bottom: 0;
+    top: auto;
+    /* Centrage horizontal + offset drag Y — ne jamais séparer ces deux composantes
+       sinon une inline style transform: translateY écrase le translateX(-50%). */
+    transform: translateX(-50%) translateY(var(--lp-sheet-drag-dy, 0px));
+    width: min(520px, calc(100vw - var(--space-8)));
+    max-width: none;
+    max-height: 80svh;
+    max-height: 80vh;
+    border: 1px solid var(--ui-border);
+    border-radius: var(--da-radius-card);
+    transition: transform var(--sheet-dur) var(--sheet-ease),
+                opacity var(--sheet-dur) var(--sheet-ease);
+  }
+
+  /* Fermée desktop : slide bas + fade. Le drag est ignoré à l'état fermé. */
+  .lp-sheet[data-open="false"] {
+    transform: translateX(-50%) translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Handle desktop : croix alignée à droite, grip masqué. */
+  .lp-sheet .lp-panel-handle {
+    flex-direction: row;
+    justify-content: flex-end;
+    min-height: auto;
+    padding: var(--space-2) var(--space-2) 0;
+    cursor: default;
+    touch-action: auto;
+  }
+
+  .lp-sheet .lp-panel-handle-grip {
+    display: none;
+  }
+
+  .lp-sheet .lp-panel-handle-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--target-min, 44px);
+    height: var(--target-min, 44px);
+    font-size: 1.25rem;
+    line-height: 1;
+    color: color-mix(in srgb, var(--ui-text) 60%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lp-sheet {
+      transition: none;
+    }
+  }
+}

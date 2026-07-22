@@ -1,0 +1,147 @@
+/*
+ * Public profile surface — Arcade direction (FEN-272, Lot D · handoff §7).
+ *
+ * "profil-stats": the totals + per-canvas table get the Arcade chrome. Token-only
+ * (AC6) — no hardcoded colours/space/radius. Reuses the global Arcade stylesheet
+ * pulled in via `../../ui`.
+ */
+.profile {
+  max-width: 56rem;
+  margin: var(--space-12) auto;
+  padding: 0 var(--space-4);
+  color: var(--ui-text);
+  font-family: var(--font-sans);
+}
+.profile-loading {
+  max-width: 56rem;
+  margin: var(--space-12) auto;
+  padding: 0 var(--space-4);
+  color: var(--ui-text-secondary);
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.profile-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+}
+.profile-avatar--placeholder {
+  background: var(--gray-200);
+}
+.profile-name {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.profile-login {
+  margin: var(--space-1) 0 0;
+  color: var(--ui-text-secondary);
+}
+.profile-since {
+  margin: var(--space-1) 0 0;
+  color: var(--ui-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+/* Totals — three stat cards (planche §3 surfaces). */
+.profile-totals dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-6);
+}
+.profile-totals dl > div {
+  background: var(--ui-surface-raised);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--da-radius-card);
+  box-shadow: var(--elev-1);
+  padding: var(--space-4);
+}
+.profile-totals dt {
+  color: var(--ui-text-secondary);
+  font-size: var(--text-sm);
+}
+.profile-totals dd {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-empty {
+  color: var(--ui-text-secondary);
+}
+
+.profile-canvases {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.profile-canvases th,
+.profile-canvases td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--ui-border);
+}
+.profile-canvases th {
+  color: var(--ui-text-secondary);
+  font-weight: var(--weight-semibold);
+}
+.profile-canvases td {
+  font-variant-numeric: tabular-nums;
+}
+.profile-canvases a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+.profile-canvases a:hover {
+  text-decoration: underline;
+}
+.profile-canvases a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Dans la sheet : neutralise le layout page du .profile root. */
+.profile--sheet {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Section "Mon canvas" (isMe) en bas de la sheet profil. */
+.profile-my-account {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--ui-border);
+}
+
+/* Not-found recovery (FEN-125) — heading + body + dual CTA. */
+.profile-notfound {
+  text-align: center;
+  padding: var(--space-12) var(--space-4);
+  color: var(--ui-text);
+}
+.profile-notfound h1 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-2xl);
+}
+.profile-notfound p {
+  color: var(--ui-text-secondary);
+  max-width: 26rem;
+  margin: 0 auto var(--space-6);
+}
+.profile-notfound__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+}
