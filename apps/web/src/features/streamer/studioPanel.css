@@ -1,0 +1,73 @@
+/*
+ * StudioPanel — content CSS (FEN-1338 · S1).
+ *
+ * Chrome (backdrop / handle / drag / animations / sizing / positioning)
+ * géré par le socle BottomSheet (.lp-sheet / bottomSheet.css).
+ * Ce fichier ne garde que le style de contenu propre à la feature studio.
+ *
+ * Importé SEULEMENT par StudioPanel.tsx, jamais par ObsView.
+ */
+
+.lp-studio-panel {
+  gap: var(--sheet-gap-section);
+}
+
+/* ── Sheet-context spacing (FEN-1881 · container-gap pattern) ────────────── */
+/*
+ * Règle unique : les conteneurs possèdent l'espacement vertical (gap) ;
+ * les enfants ne portent aucune marge. 3 crans :
+ *   8px  intra-groupe  (label → contrôle, via lp-studio__config-field)
+ *  16px  groupe↔groupe (via gap sur .lp-studio__section)
+ *  24px  autour d'un séparateur (gap panel 16px + padding-top 8px)
+ *
+ * Les marges d'échelle page (--space-6/8) sont scopées sous .lp-studio dans
+ * studio.css ; elles n'ont pas d'effet ici.
+ */
+
+/* Config form: override --space-5 inter-section gap to sheet token */
+.lp-studio-panel .lp-studio__config-form {
+  gap: var(--sheet-gap-section);
+  margin-top: 0;
+}
+
+/* Section containers: flex column for group-to-group gap */
+.lp-studio-panel .lp-studio__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-section);
+}
+
+/* Section headings: no vertical margin — parent gap controls the space above */
+.lp-studio-panel .lp-studio__section-title {
+  margin: 0;
+}
+
+/* Inline elements whose page-scale margins would add unwanted space in sheet */
+.lp-studio-panel .lp-studio__url-box {
+  margin-bottom: 0;
+}
+.lp-studio-panel .lp-studio-subscreen-btns {
+  margin-top: 0;
+}
+.lp-studio-panel .lp-studio__save-row {
+  margin-top: 0;
+}
+
+/* Separator sections (Modérateurs, Contrôles d'urgence):
+   flex column for internal gap; 8px below the border-top.
+   Panel gap (16px above) + padding-top (8px below) = 24px total around border. */
+.lp-studio-panel .lp-studio__mods-section,
+.lp-studio-panel .lp-studio__crisis-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sheet-gap-section);
+  margin-top: 0;
+  padding-top: var(--space-2);
+}
+
+/* Crisis card: accommodate elev-1 (2px right+bottom hard shadow) so the button
+   shadow has the same visual breathing room on all 4 sides. */
+.lp-studio-panel .lp-crisis {
+  padding-right: calc(var(--space-4) + 2px);
+  padding-bottom: calc(var(--space-4) + 2px);
+}

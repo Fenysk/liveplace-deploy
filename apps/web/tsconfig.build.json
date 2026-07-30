@@ -1,0 +1,19 @@
+{
+  // Image/CI build typecheck. Identical to tsconfig.json but drops the *.test.ts
+  // files: tests import the module-under-test with an explicit `.ts` extension
+  // (run under `node --experimental-transform-types`), which `tsc` rejects
+  // (TS5097) unless `allowImportingTsExtensions` is on. We do NOT want to relax
+  // that for the whole project, so the production build simply excludes tests.
+  // `pnpm test` still typechecks them via the node test runner. (FEN-78 #2)
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The SPA is a noEmit leaf — it never produces .d.ts. The base config turns
+    // `declaration` on (for the library packages), which makes tsc run the
+    // declaration-portability check and trip TS2742 on better-auth's inferred
+    // `authClient` type. Disable it here so the image build typecheck is clean.
+    // declarationMap follows declaration (TS5069 if left on alone).
+    "declaration": false,
+    "declarationMap": false
+  },
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

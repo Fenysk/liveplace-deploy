@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+# Also ignore node_modules symlinks (the trailing-slash rule above matches only
+# dirs; pnpm/sandbox checkouts create `node_modules` as a symlink that slipped
+# into a merge once — FEN-1600). No trailing slash + **/ catches those.
+node_modules
+**/node_modules
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Env & secrets — NEVER commit real secrets
+.env
+.env.*
+!.env.example
+# Disposable load-test template carries only dummy values (FEN-511) — safe to track.
+!.env.loadtest.example
+# Coolify deploy inputs hold the API token + stack secrets (deploy.env.example is fine).
+infra/coolify/deploy.env
+
+# Convex
+apps/convex/.convex/
+
+# TanStack Router — generated from src/routes/ via `tsr generate` (in build/typecheck scripts)
+apps/web/src/routeTree.gen.ts
+
+# Logs / runtime
+*.log
+# Root-level runtime volumes only (docker compose). Anchored with a leading
+# slash so the rule never swallows nested source dirs of the same name.
+/data/
+/redis-data/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,168 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LivePlace — DISPOSABLE LOAD-TEST STACK (FEN-511 / T3, plan FEN-495 §5).
+#
+#   ⚠️  THIS IS NEVER PRODUCTION. It runs a self-contained, throwaway copy of the
+#       real stack so we can hammer the gateway/Redis/worker hot path WITHOUT
+#       touching prod data, prod Redis, prod Convex, or the prod domain.
+#
+# What it brings up (the isolated chain that matters for the flush ceiling):
+#     redis  →  convex-backend (self-hosted, FREE in Convex metering)
+#            →  convex-admin-key (mint key)  →  convex-deploy (push functions)
+#            →  gateway (WS hot path, port published to host for the driver)
+#            →  worker  (batch-flush Redis stream → the TEST Convex, end-to-end)
+#
+# Deliberately NO `web` SPA and NO `proxy`/TLS: a load run drives the raw gateway
+# directly, and provisioning certs on a throwaway box is pure cost + a cert-rate
+# hazard. Reuses the SAME Dockerfiles/build contexts as docker-compose.yml, so the
+# images under test are byte-identical to prod — this is a trimmed disposable
+# topology, not a snowflake.
+#
+# Hard isolation guarantees:
+#   • top-level `name:` pins the compose project to `liveplace-loadtest`, so its
+#     volumes/network are namespaced (`liveplace-loadtest_*`) and can NEVER
+#     collide with, read, or clobber a prod stack — even on a `docker compose -f
+#     docker-compose.loadtest.yml up` with no `-p` flag.
+#   • Every service reads ONLY `.env.loadtest` (never `.env`) — no chance of
+#     inheriting prod secrets/URLs. Copy `.env.loadtest.example` → `.env.loadtest`.
+#   • All volumes are throwaway: `docker compose -f docker-compose.loadtest.yml
+#     down -v` deletes redis-data / convex-data-2 / convex-admin and leaves no
+#     residue. See scripts/loadtest.sh and docs/runbooks/loadtest-env.md.
+#
+# Launch:  ./scripts/loadtest.sh up   (wrapper enforces project name + env file)
+# Stop:    ./scripts/loadtest.sh down
+# Nuke:    ./scripts/loadtest.sh clean   (== down -v, removes the disposable data)
+# ─────────────────────────────────────────────────────────────────────────────
+name: liveplace-loadtest
+
+services:
+  redis:
+    image: redis:7-alpine
+    # AOF on for parity with prod, but the volume is disposable — `down -v` wipes it.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    env_file: [.env.loadtest]
+    environment:
+      # Distinct instance name from prod — belt-and-suspenders on top of the
+      # project-name + separate-machine isolation.
+      - INSTANCE_NAME=liveplace-loadtest
+      - INSTANCE_SECRET=${CONVEX_INSTANCE_SECRET}
+      # No browser/proxy in the load stack: origins point at the in-container
+      # backend. They only matter for client-facing URLs (unused here); the worker
+      # reaches the backend over the compose network at convex-backend:3210.
+      - CONVEX_CLOUD_ORIGIN=http://localhost:3210
+      - CONVEX_SITE_ORIGIN=http://localhost:3211
+    volumes:
+      - convex-data-2:/convex/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # One-shot: mint the self-hosted Convex admin key from INSTANCE_SECRET, no manual
+  # terminal (FEN-92). Same Dockerfile + flow as prod; ALWAYS exits 0.
+  convex-admin-key:
+    build:
+      context: .
+      dockerfile: infra/convex-admin-key/Dockerfile
+    env_file: [.env.loadtest]
+    environment:
+      # MUST match convex-backend exactly — key is signed with the instance secret.
+      - INSTANCE_NAME=liveplace-loadtest
+      - INSTANCE_SECRET=${CONVEX_INSTANCE_SECRET}
+    volumes:
+      - convex-admin:/admin
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    restart: "no"
+
+  # One-shot: deploy Convex functions into the TEST backend, seed deployment env,
+  # then exit. This is what makes the worker's flush land in a real (disposable)
+  # Convex — proving the end-to-end persistence path, free in metering.
+  convex-deploy:
+    build:
+      context: .
+      dockerfile: apps/convex/Dockerfile
+    env_file: [.env.loadtest]
+    environment:
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+    volumes:
+      - convex-admin:/admin:ro
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+      convex-admin-key:
+        condition: service_started
+    restart: "no"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    env_file: [.env.loadtest]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+      # FEN-2051 (audit N12): keep parity with docker-compose.yml so the load run
+      # measures the CURRENT prod topology. CONVEX_URL (FEN-1786) backs the shared
+      # Convex client (per-canvas dims cache + F6 gauge-max bonus); without it the
+      # gateway degrades to the 512² fallback and 0 bonus — a topology prod no
+      # longer runs. Points at the in-stack backend (never a prod URL).
+      - CONVEX_URL=http://convex-backend:3210
+      # No proxy here, so JWKS still resolves over the compose network if a run
+      # opts into authenticated sockets. Default load runs use GATEWAY_AUTH_DISABLED=1
+      # (anonymous) — see .env.loadtest — to isolate the Redis/worker ceiling from
+      # auth cost. Gauge sizing (relaxed vs realistic) comes from .env.loadtest.
+      - CONVEX_JWKS_URL=http://convex-backend:3211/api/auth/convex/jwks
+      - GATEWAY_JWT_ISSUER=${PUBLIC_SITE_URL:-}
+      - GATEWAY_JWT_AUDIENCE=convex
+    # PUBLISH the gateway to the host so the load driver + smoke connect to the raw
+    # WS hot path directly (bypassing any proxy). Host port is configurable to avoid
+    # clashes on a shared dev box; container always listens on 8080.
+    ports:
+      - "${LOADTEST_GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: [.env.loadtest]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CONVEX_SELF_HOSTED_URL=http://convex-backend:3210
+      - GATEWAY_INTERNAL_SECRET=${GATEWAY_INTERNAL_SECRET:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      convex-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # All three are DISPOSABLE. `down -v` (./scripts/loadtest.sh clean) removes them.
+  redis-data:
+  convex-data-2:
+  convex-admin:

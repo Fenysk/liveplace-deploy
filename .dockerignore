@@ -1,0 +1,22 @@
+node_modules
+**/node_modules
+**/dist
+.git
+# D9 (FEN-2051 / audit FEN-2034): the gateway fan-out + stress harness
+# (apps/gateway/load/, ~2.5k lines + captured result JSON) is DEV TOOLING — no
+# runtime image ever imports it. It stays in the repo as a living harness, but is
+# excluded from every build context so `COPY apps/gateway` in the gateway
+# Dockerfile cannot bake it into the prod image.
+apps/gateway/load
+# Never bake env files into an image — at the root OR nested (e.g.
+# apps/convex/.env.local, which carries a CONVEX_DEPLOYMENT that breaks the
+# self-hosted deploy — FEN-78 #3). The `**/` globs cover every subdirectory.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+*.log
+data
+redis-data

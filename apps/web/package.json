@@ -1,0 +1,36 @@
+{
+  "name": "@canvas/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsr generate && tsc -p tsconfig.build.json --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsr generate && tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-transform-types --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@canvas/canvas-rules": "workspace:*",
+    "@canvas/convex": "workspace:*",
+    "@canvas/i18n": "workspace:*",
+    "@canvas/protocol": "workspace:*",
+    "@convex-dev/better-auth": "0.12.2",
+    "@tanstack/react-router": "^1",
+    "better-auth": "1.6.13",
+    "convex": "^1.39.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@tanstack/router-cli": "^1",
+    "@tanstack/router-plugin": "^1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
+  }
+}

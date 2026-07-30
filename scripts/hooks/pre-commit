@@ -1,0 +1,18 @@
+#!/bin/sh
+# Optional local mirror of the CI lint gate (FEN-661). Zero new dependencies:
+# a plain git hook, no husky. Opt in once per clone with:
+#
+#   git config core.hooksPath scripts/hooks
+#
+# Then `git commit` runs the same `eslint . --max-warnings 0` gate CI enforces,
+# catching violations before they ever reach `main`. Skip a single commit with
+# `git commit --no-verify` if you must.
+set -e
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pre-commit: pnpm not found — skipping lint gate (CI will still enforce it)." >&2
+  exit 0
+fi
+
+echo "pre-commit: running lint gate (eslint --max-warnings 0)…"
+pnpm lint --max-warnings 0

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
+    "declaration": false,
+    "declarationMap": false,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true
+  },
+  "include": ["convex/**/*.ts"],
+  "exclude": ["node_modules", "convex/**/*.test.ts"]
+}

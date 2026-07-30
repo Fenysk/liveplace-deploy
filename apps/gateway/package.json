@@ -1,0 +1,27 @@
+{
+  "name": "@canvas/gateway",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.load.json --noEmit",
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "test": "node --import tsx --test 'src/test/*.test.ts'"
+  },
+  "dependencies": {
+    "@canvas/points-rules": "workspace:*",
+    "@canvas/protocol": "workspace:*",
+    "@canvas/redis-scripts": "workspace:*",
+    "convex": "^1.39.1",
+    "ioredis": "^5.4.1",
+    "jose": "^5",
+    "tsx": "^4.19.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "22",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.3"
+  }
+}

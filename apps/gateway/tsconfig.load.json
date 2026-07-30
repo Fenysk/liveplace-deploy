@@ -1,0 +1,18 @@
+{
+  // Dedicated typecheck project for the load/stress harness (apps/gateway/load).
+  // These ~1800 lines live outside the runtime `tsconfig.json` (rootDir ./src),
+  // so they were never type-checked and could rot silently (FEN-1946, S0). This
+  // project brings them under `pnpm typecheck` without polluting the shipped
+  // `src` build (separate rootDir, same strict base).
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // rootDir spans the app so load/*.ts may import its real ../src deps
+    // (they are already type-checked by tsconfig.json; here they are just
+    // resolved as dependencies of the harness).
+    "rootDir": ".",
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["load/**/*.ts"]
+}

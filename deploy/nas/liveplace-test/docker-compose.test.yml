@@ -1,0 +1,61 @@
+# LivePlace — TEST overlay for the shared NAS (FEN-523).
+#
+# Composed ON TOP of the root docker-compose.yml:
+#   docker compose -p liveplace-test \
+#     -f docker-compose.yml \
+#     -f deploy/nas/liveplace-test/docker-compose.test.yml up -d --build
+#
+# Isolation contract (NAS is shared — receipt-scanner, dns-router-caddy, and an
+# existing `liveplace` stack on :8090 with an unhealthy gateway, see FEN-524):
+#   * Project name `liveplace-test` prefixes ALL containers, the default network,
+#     and every named volume (redis-data-fen435, convex-data-fen435, convex-admin,
+#     caddy-data, caddy-config) -> zero collision with the `liveplace` project.
+#   * The root proxy only `expose:`s :80 (built for Coolify/Traefik). Here we add
+#     a LOOPBACK-ONLY host publish so `tailscale serve` (run on the NAS host) can
+#     reach it, WITHOUT exposing it on the LAN or colliding with :8090.
+#   * No service other than the proxy publishes a host port.
+services:
+  proxy:
+    # Bind host is configurable (plan §3):
+    #   PROXY_BIND=127.0.0.1      -> NAS-host only; front with Tailscale Serve HTTPS
+    #                                (needs tailnet "Serve" enabled + operator/root).
+    #   PROXY_BIND=<tailscale-ip> -> tailnet-only HTTP preview, NO sudo/admin needed
+    #                                (interim exposure: http://<magicdns>:8091).
+    # Never 0.0.0.0 (that would also expose on the LAN). Default loopback (safe).
+    # PROXY_HTTP_PORT defaults to 8091 (off the 8090 tenant).
+    ports:
+      - "${PROXY_BIND:-127.0.0.1}:${PROXY_HTTP_PORT:-8091}:80"
+    # Bound resource envelope on a shared NAS (blast-radius cap, plan §2).
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  gateway:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  worker:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+
+  convex-backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1G
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
